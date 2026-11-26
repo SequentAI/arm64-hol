@@ -1,4 +1,4 @@
-# arm64-isa
+# arm64-hol
 
 Executable HOL4 semantics for a subset of the little-endian A64
 instruction set at EL0, based on the
@@ -26,9 +26,9 @@ With Poly/ML and holbuild on PATH:
 
 ```sh
 holbuild buildhol
-holbuild -j4 build arm64IsaHolTheory
+holbuild -j4 build arm64HolTheory
 holbuild check arm64CryptoTheory arm64IsaTheory arm64IsaCvTheory \
-  arm64NativeCasesTheory arm64NativeTheory arm64L3Theory arm64IsaHolTheory
+  arm64NativeCasesTheory arm64NativeTheory arm64L3Theory arm64HolTheory
 ```
 
 ## Conformance
