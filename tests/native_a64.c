@@ -12,14 +12,14 @@
 
 typedef void (*instruction)(void);
 
-extern const unsigned char ins_adr[], ins_adr_back[], ins_adrp[], ins_adrp_back[], ins_br[];
+extern const unsigned char ins_adr[], ins_adr_back[], ins_adrp[], ins_adrp_back[], ins_br[], ins_blr[];
 
 #define CASES(X) \
     X(cbz, -1, 0, 0, 0) X(mov, -1, 0, 0, 0) X(movz, -1, 0, 0, 0) X(addext, -1, 0, 0, 0) X(ldrb, 2, 0, 0, 0) \
     X(add, -1, 0, 0, 0) X(cmp, -1, 0, 0, 0) X(bne, -1, 0, 0, 0) X(ret, -1, 0, 0, 0) X(ldpq, 1, 0, 0, 0) \
     X(stpq, 0, 0, 0, 0) X(stpx, 0, 0, 0, 0) X(movi, -1, 0, 0, 0) X(nop, -1, 0, 0, 0) X(stpx_regs, 0, 0, 0, 0) X(stpx_zero, 0, 0, 0, 0) \
     X(addsp, -1, 0, 0, 0) X(ldrb_sp, -1, 0, 0, 0) X(ldpq_pos, 1, 0, 0, 0) X(stpq_neg, 0, 0, 0, 0) \
-    SCALAR_CASES(X) SIMD_CASES(X) CCMP_FALLBACK_CASES(X) X(br, -1, 0, 0, 0) PERMUTE_CASES(X) \
+    SCALAR_CASES(X) SIMD_CASES(X) CCMP_FALLBACK_CASES(X) X(br, -1, 0, 0, 0) X(blr, -1, 0, 0, 0) PERMUTE_CASES(X) \
     CRC_CASES(X) CRYPTO_SIMD_CASES(X)
 #define DECLARE(name, pointer_reg, indexed, stack, vector_base) extern void case_##name(void);
 CASES(DECLARE)
@@ -201,7 +201,7 @@ static void run_case(const char *name, instruction code, enum case_id id,
                 : n;
         }
         s.lr = id == Case_ret ? (uint64_t)(256 + link_delta) : UINT64_C(0x12345678);
-        if (id == Case_br)
+        if (id == Case_br || id == Case_blr)
             s.regs[1] = (uint64_t)(256 + branch_delta);
         printf("%s\n", name);
         emit(&s);
@@ -209,11 +209,12 @@ static void run_case(const char *name, instruction code, enum case_id id,
             s.regs[pointer_reg] = (uintptr_t)(s.data + offset);
         if (uses_sp)
             s.sp = (uintptr_t)(s.data + sp_offset);
-        if (id == Case_br)
-            s.regs[1] += (uintptr_t)ins_br - 256;
+        const uintptr_t branch = (uintptr_t)(id == Case_blr ? ins_blr : ins_br);
+        if (id == Case_br || id == Case_blr)
+            s.regs[1] += branch - 256;
         native_step(&s, code, link_delta, vector_base);
-        if (id == Case_br)
-            s.regs[1] += 256 - (uintptr_t)ins_br;
+        if (id == Case_br || id == Case_blr)
+            s.regs[1] += 256 - branch;
         if (pointer_reg >= 0)
             s.regs[pointer_reg] = 0x1000 + (s.regs[pointer_reg] - (uintptr_t)s.data);
         if (uses_sp)

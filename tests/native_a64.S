@@ -127,6 +127,16 @@ word_label br
     mov x12, #20
     b .Lfinish
 
+start blr
+    adr x17, ins_blr
+word_label blr
+    blr x1
+    next
+    mov x12, #12
+    b .Lfinish
+    mov x12, #20
+    b .Lfinish
+
 straight ldpq, "ldp q0, q1, [x1]"
 straight stpq, "stp q0, q1, [x0]"
 straight stpx, "stp xzr, xzr, [x0, #16]"

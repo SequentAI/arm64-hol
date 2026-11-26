@@ -151,8 +151,8 @@ val () = check_fault "unknown_word_is_unsupported" enabled
   ``test_state 0w ^initial`` ``Unsupported``;
 val () = check_fault "ccmp_rejects_bit4" enabled
   ``test_state 0xfa498812w ^initial`` ``Unsupported``;
-val () = check_fault "andimm7_rejects_noncanonical_mask" enabled
-  ``test_state 0x92411863w ^initial`` ``Unsupported``;
+val () = check_fault "and_imm_rejects_reserved_mask" enabled
+  ``test_state 0x1200fc00w ^initial`` ``Unsupported``;
 val () = check_fault "post_index_load_rejects_base_destination_overlap" enabled
   ``test_state 0x38401442w ^initial`` ``Unsupported``;
 val () = check_fault "q_load_rejects_destination_overlap" enabled
@@ -190,8 +190,8 @@ val () = check_fault "q_post_load_checks_sp_before_access" enabled
   ``test_state 0x3cc107e0w ^initial with sp := 4097w`` ``SPAlignment``;
 val () = check_fault "q_pair_store_checks_sp_before_access" enabled
   ``test_state 0xad0003e0w ^initial with sp := 4097w`` ``SPAlignment``;
-val () = check_fault "q_pre_index_load_is_unsupported" enabled
-  ``test_state 0x3cc10c20w ^initial`` ``Unsupported``;
+val () = check_fault "simd_unprivileged_load_is_unallocated" enabled
+  ``test_state 0x3cc10820w ^initial`` ``Unsupported``;
 val () = check_fault "addv_64bit_arrangement_is_unsupported" enabled
   ``test_state 0x4ef1b800w ^initial`` ``Unsupported``;
 (* Match the RET on the read-only page used by the hardware test. *)

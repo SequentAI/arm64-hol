@@ -8,9 +8,12 @@ The model uses byte-addressed memory with per-byte permissions and omits
 address translation.
 
 `isa/` defines instruction decoding and encoding, the machine state, and
-one-instruction execution. It covers scalar integer instructions, branches,
-loads and stores, and selected 128-bit AdvSIMD, CRC-32, CRC-32C, polynomial
-multiply and AES instructions. The model gates optional instruction
+one-instruction execution. It covers the base A64 integer and branch
+instructions other than pointer authentication, all general-register
+loads, stores and prefetches outside the atomic, exclusive and ordered
+classes, SIMD&FP single-register, pair and literal loads and stores,
+AdvSIMD modified-immediate moves, and selected AdvSIMD, CRC-32, CRC-32C,
+polynomial multiply and AES instructions. The model gates optional instruction
 families by feature and faults on unsupported encodings. Fetches require
 readable, executable, non-writable bytes. Stores require readable,
 writable, non-executable bytes. SP-based transfers also require 16-byte
@@ -53,6 +56,19 @@ rustup's `llvm-tools` component.
 ```sh
 rustup component add llvm-tools
 python3 tests/generate_native.py --check
+```
+
+## Coverage
+
+`tools/a64_coverage.py` measures the decoder against every A64 encoding
+clause of Arm's Armv9.4-A Sail model
+([rems-project/sail-arm](https://github.com/rems-project/sail-arm)). It
+samples each clause, classifies the samples with the Sail decoder, decodes
+them in HOL4, and reports, per instruction area, the clauses the model
+covers and any word it accepts that Sail rejects.
+
+```sh
+python3 tools/a64_coverage.py --json coverage.json
 ```
 
 Released under the [BSD 3-Clause License](LICENSE).
