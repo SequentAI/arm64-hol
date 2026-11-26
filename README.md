@@ -64,7 +64,7 @@ inventory. It covers data-processing immediate/register, branches and EL0
 system, loads/stores, and AdvSIMD/crypto forms. Each row records explicit
 masks, opcodes or encoding partitions, decode/encode and execution evidence,
 and native, L3, universal, and optional C-contract evidence separately. The
-127-form denominator does not depend on generated compiler bytes.
+141-form denominator does not depend on generated compiler bytes.
 
 ```sh
 python3 tools/a64_coverage.py --check --accept-add
@@ -74,3 +74,4 @@ PYTHONPATH=tools python3 -m unittest discover -s tools -p 'test_*.py'
 The acceptance check hides one implemented ADD width and verifies that exactly
 that row becomes missing while the denominator stays fixed. Valid unimplemented
 forms remain explicit in the report. Generated C scripts are optional evidence.
+Use `--json` when machine-readable contract witnesses are needed.

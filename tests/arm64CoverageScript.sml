@@ -169,7 +169,18 @@ Definition a64_decode_coverage_probes_2_4_def:
      (0x4f205400w, 38w);
      (0x4f405400w, 38w);
      (0x6f200400w, 38w);
-     (0x6f400400w, 38w);
+     (0x6f400400w, 38w)]
+End
+
+Theorem a64_decode_coverage_probes_2_4_decode_encode:
+  EVERY (λ(w,t). case decode armv9_4 w of NONE => F | SOME i => coverage_tag i = t ∧ encode i = SOME w)
+    a64_decode_coverage_probes_2_4
+Proof
+  EVAL_TAC
+QED
+
+Definition a64_decode_coverage_probes_2_4b_def:
+  a64_decode_coverage_probes_2_4b = [
      (0x6f204400w, 38w);
      (0x6f404400w, 38w);
      (0x1e260000w, 39w);
@@ -181,9 +192,9 @@ Definition a64_decode_coverage_probes_2_4_def:
      (0x1ac04000w, 40w)]
 End
 
-Theorem a64_decode_coverage_probes_2_4_decode_encode:
+Theorem a64_decode_coverage_probes_2_4b_decode_encode:
   EVERY (λ(w,t). case decode armv9_4 w of NONE => F | SOME i => coverage_tag i = t ∧ encode i = SOME w)
-    a64_decode_coverage_probes_2_4
+    a64_decode_coverage_probes_2_4b
 Proof
   EVAL_TAC
 QED
@@ -860,6 +871,68 @@ Proof
   EVAL_TAC
 QED
 
+(* Variant probes keep the grouped inventory rows honest without making one
+   EVAL_TAC goal exceed the HOL tactic budget. *)
+Definition a64_decode_coverage_variants_1_def:
+  a64_decode_coverage_variants_1 = [
+     (0x54000001w, 2w); (0x54000002w, 2w); (0x54000003w, 2w);
+     (0x54000004w, 2w); (0x54000005w, 2w); (0x54000006w, 2w);
+     (0x54000007w, 2w); (0x54000008w, 2w); (0x54000009w, 2w);
+     (0x5400000aw, 2w); (0x5400000bw, 2w); (0x5400000cw, 2w);
+     (0x5400000dw, 2w); (0x5400000ew, 2w); (0x5400000fw, 2w)]
+End
+
+Theorem a64_decode_coverage_variants_1_decode_encode:
+  EVERY (λ(w,t). case decode armv9_4 w of NONE => F | SOME i => coverage_tag i = t ∧ encode i = SOME w)
+    a64_decode_coverage_variants_1
+Proof
+  EVAL_TAC
+QED
+
+Definition a64_decode_coverage_variants_2_def:
+  a64_decode_coverage_variants_2 = [
+     (0x94000000w, 1w); (0x90000000w, 10w);
+     (0x35000000w, 3w); (0xb4000000w, 3w); (0xb5000000w, 3w);
+     (0x37000000w, 4w); (0xb6000000w, 4w); (0xb7000000w, 4w)]
+End
+
+Theorem a64_decode_coverage_variants_2_decode_encode:
+  EVERY (λ(w,t). case decode armv9_4 w of NONE => F | SOME i => coverage_tag i = t ∧ encode i = SOME w)
+    a64_decode_coverage_variants_2
+Proof
+  EVAL_TAC
+QED
+
+Definition a64_decode_coverage_variants_3_def:
+  a64_decode_coverage_variants_3 = [
+     (0x2a000000w, 22w); (0x4a000000w, 22w); (0x6a000000w, 22w);
+     (0x8a000000w, 22w); (0xaa000000w, 22w); (0xca000000w, 22w);
+     (0xea000000w, 22w);
+     (0x1a800400w, 26w); (0x5a800000w, 26w); (0x5a800400w, 26w);
+     (0x9a800000w, 26w); (0x9a800400w, 26w); (0xda800000w, 26w);
+     (0xda800400w, 26w)]
+End
+
+Theorem a64_decode_coverage_variants_3_decode_encode:
+  EVERY (λ(w,t). case decode armv9_4 w of NONE => F | SOME i => coverage_tag i = t ∧ encode i = SOME w)
+    a64_decode_coverage_variants_3
+Proof
+  EVAL_TAC
+QED
+
+Definition a64_decode_coverage_variants_4_def:
+  a64_decode_coverage_variants_4 = [
+     (0x1b008000w, 28w); (0x9b000000w, 28w); (0x9b008000w, 28w);
+     (0x1ac00c00w, 30w); (0x9ac00800w, 30w); (0x9ac00c00w, 30w)]
+End
+
+Theorem a64_decode_coverage_variants_4_decode_encode:
+  EVERY (λ(w,t). case decode armv9_4 w of NONE => F | SOME i => coverage_tag i = t ∧ encode i = SOME w)
+    a64_decode_coverage_variants_4
+Proof
+  EVAL_TAC
+QED
+
 
 (* Valid architectural encodings intentionally unimplemented by arm64Isa. *)
 Definition a64_decode_unimplemented_probes_1_def:
@@ -983,6 +1056,30 @@ End
 
 Theorem a64_decode_unimplemented_probes_7_none:
   EVERY (λw. decode armv9_4 w = NONE) a64_decode_unimplemented_probes_7
+Proof
+  EVAL_TAC
+QED
+
+Definition a64_decode_unimplemented_probes_8_def:
+  a64_decode_unimplemented_probes_8 = [
+     (0xf8200020w);
+     (0xc8a07c00w);
+     (0xacc00440w);
+     (0xadc00440w);
+     (0xac800440w);
+     (0x3ce06800w);
+     (0x3c800400w);
+     (0x6ea08420w);
+     (0x4ea09c20w);
+     (0x0e000000w);
+     (0x4e002000w);
+     (0x5e020800w);
+     (0x4e20d400w);
+     (0xd53bd040w)]
+End
+
+Theorem a64_decode_unimplemented_probes_8_none:
+  EVERY (λw. decode armv9_4 w = NONE) a64_decode_unimplemented_probes_8
 Proof
   EVAL_TAC
 QED

@@ -21,7 +21,7 @@ from typing import Iterable
 
 INVENTORY_VERSION = "a64-el0-v1.1-armv9.4"
 INVENTORY_SOURCE = "Arm DDI 0487 and DDI 0602 A64 instruction descriptions"
-ARCHITECTURAL_TOTAL = 127
+ARCHITECTURAL_TOTAL = 141
 
 
 @dataclass(frozen=True)
@@ -90,7 +90,7 @@ INVENTORY: tuple[Form, ...] = (
     Form("dp-imm.move-wide-not", "data processing immediate", "MoveNot", 0x7F800000, 0x12800000, ("MOVN", "sf=W/X", "hw=0/1"), "valid_but_unimplemented"),
     Form("dp-imm.move-wide-keep", "data processing immediate", "MoveKeep", 0x7F800000, 0x72800000, ("MOVK", "sf=W/X", "hw=0/1"), "valid_but_unimplemented"),
     Form("dp-reg.compare-immediate", "data processing register", "CompareImm", 0x7FE00C10, 0x7A400800, ("sf=W/X", "condition", "NZCV")),
-    Form("dp-imm.pc-relative", "data processing immediate", "PcAddress", 0x1F000000, 0x10000000, ("ADR/ADRP", "sf=0/1")),
+    Form("dp-imm.pc-relative", "data processing immediate", "PcAddress", 0x1F000000, 0x10000000, ("ADR/ADRP", "sf=0/1"), probe_words=(0x10000000, 0x90000000)),
     Form("dp-imm.logical-mask-and", "data processing immediate", "LogicalMask", 0x7F800000, 0x12000000, ("AND W/X logical immediate", "modeled literals: 0x92400000, 0x92400c00, 0x12001400, 0x12001800, 0x92401800"), "partially_implemented", probe_words=(0x92400000, 0x92400C00, 0x12001400, 0x12001800, 0x92401800)),
     Form("dp-imm.logical-mask-orr", "data processing immediate", "LogicalMask", 0x7F800000, 0x32000000, ("ORR W/X logical immediate", "modeled literal: 0x321a6400"), "partially_implemented", probe_words=(0x321A6400,)),
     Form("dp-imm.and-byte-mask", "data processing immediate", "AndByteMask", 0xFFFFFC00, 0x12001C00, ("W" ,)),
@@ -101,16 +101,17 @@ INVENTORY: tuple[Form, ...] = (
     Form("dp-imm.logical-immediate-eor", "data processing immediate", "LogicalImmediateEor", 0x7F800000, 0x52000000, ("EOR W/X logical immediate",), "valid_but_unimplemented"),
     Form("dp-imm.logical-immediate-ands", "data processing immediate", "LogicalImmediateAnds", 0x7F800000, 0x72000000, ("ANDS W/X logical immediate",), "valid_but_unimplemented", probe_words=(0x72000000,)),
     # Branches and EL0 system instructions.
-    Form("branch.unconditional", "branches/system EL0", "BranchImm", 0x7C000000, 0x14000000, ("B/BL",)),
-    Form("branch.conditional", "branches/system EL0", "BCond", 0xFF000010, 0x54000000, ("16 conditions",)),
-    Form("branch.compare", "branches/system EL0", "CompareBranch", 0x7E000000, 0x34000000, ("CBZ/CBNZ", "W/X")),
-    Form("branch.test", "branches/system EL0", "TestBranch", 0x7E000000, 0x36000000, ("TBZ/TBNZ", "W/X")),
+    Form("branch.unconditional", "branches/system EL0", "BranchImm", 0x7C000000, 0x14000000, ("B/BL",), probe_words=(0x14000000, 0x94000000)),
+    Form("branch.conditional", "branches/system EL0", "BCond", 0xFF000010, 0x54000000, ("16 conditions",), probe_words=tuple(0x54000000 | condition for condition in range(16))),
+    Form("branch.compare", "branches/system EL0", "CompareBranch", 0x7E000000, 0x34000000, ("CBZ/CBNZ", "W/X"), probe_words=(0x34000000, 0x35000000, 0xB4000000, 0xB5000000)),
+    Form("branch.test", "branches/system EL0", "TestBranch", 0x7E000000, 0x36000000, ("TBZ/TBNZ", "W/X"), probe_words=(0x36000000, 0x37000000, 0xB6000000, 0xB7000000)),
     Form("branch.register", "branches/system EL0", "Br", 0xFFFFFC1F, 0xD61F0000, ("BR",)),
     Form("branch.register-link", "branches/system EL0", "Blr", 0xFFFFFC1F, 0xD63F0000, ("BLR",), "valid_but_unimplemented"),
     Form("branch.return", "branches/system EL0", "Ret", 0xFFFFFC1F, 0xD65F0000, ("RET",)),
     Form("system.nop", "branches/system EL0", "Nop", 0xFFFFFFFF, 0xD503201F, ("HINT #0",)),
     Form("system.svc", "branches/system EL0", "Svc", 0xFFE0001F, 0xD4000001, ("imm16",), "valid_but_unimplemented"),
     Form("system.brk", "branches/system EL0", "Brk", 0xFFE0001F, 0xD4200000, ("imm16",), "valid_but_unimplemented", probe_words=(0xD4200000,)),
+    Form("system.register-read", "branches/system EL0", "SystemRegRead", 0xFFE00000, 0xD5200000, ("MRS TPIDR_EL0",), "valid_but_unimplemented", probe_words=(0xD53BD040,)),
     Form("system.hint-yield", "branches/system EL0", "Hint", 0xFFFFFFFF, 0xD503203F, ("YIELD",), "valid_but_unimplemented"),
     Form("system.hint-wfe", "branches/system EL0", "Hint", 0xFFFFFFFF, 0xD503205F, ("WFE",), "valid_but_unimplemented"),
     Form("system.hint-wfi", "branches/system EL0", "Hint", 0xFFFFFFFF, 0xD503207F, ("WFI",), "valid_but_unimplemented"),
@@ -135,6 +136,13 @@ INVENTORY: tuple[Form, ...] = (
     Form("load-store.literal", "loads/stores", "LdrLiteral", 0xFF000000, 0x18000000, ("LDR literal", "W/X/LDRSW/S/D/Q"), "valid_but_unimplemented", probe_words=(0x18000000, 0x58000000, 0x98000000, 0x1C000000, 0x5C000000, 0x9C000000), encoding_partitions=((0xFF000000, 0x18000000), (0xFF000000, 0x58000000), (0xFF000000, 0x98000000), (0xFF000000, 0x1C000000), (0xFF000000, 0x5C000000), (0xFF000000, 0x9C000000))),
     Form("load-store.exclusive", "loads/stores", "Exclusive", 0x3F20FC00, 0x08007C00, ("LDXR/STXR", "B/H/W/X"), "valid_but_unimplemented"),
     Form("load-store.acquire-release", "loads/stores", "AcquireRelease", 0x3F20FC00, 0x0800FC00, ("LDAXR/STLXR", "B/H/W/X"), "valid_but_unimplemented"),
+    Form("load-store.atomic-add", "loads/stores", "Atomic", 0xFFE0FC00, 0xF8200000, ("LDADD", "B/H/W/X"), "valid_but_unimplemented", probe_words=(0xF8200020,)),
+    Form("load-store.atomic-compare-swap", "loads/stores", "AtomicCompareSwap", 0xFFFFFC00, 0xC8A07C00, ("CAS", "W/X"), "valid_but_unimplemented", probe_words=(0xC8A07C00,)),
+    Form("load-store.q-pair-load-post", "loads/stores", "LdpQ", 0xFFE00C00, 0xACC00400, ("Q", "post-index"), "valid_but_unimplemented", "asimd", probe_words=(0xACC00440,)),
+    Form("load-store.q-pair-load-pre", "loads/stores", "LdpQ", 0xFFE00C00, 0xADC00400, ("Q", "pre-index"), "valid_but_unimplemented", "asimd", probe_words=(0xADC00440,)),
+    Form("load-store.q-pair-store-post", "loads/stores", "StpQ", 0xFFE00C00, 0xAC800400, ("Q", "post-index"), "valid_but_unimplemented", "asimd", probe_words=(0xAC800440,)),
+    Form("load-store.q-register-load", "loads/stores", "LdrQ", 0xFFE0FC00, 0x3CE06800, ("Q", "register offset"), "valid_but_unimplemented", "asimd", probe_words=(0x3CE06800,)),
+    Form("load-store.q-store-post", "loads/stores", "StrQ", 0xFFE00C00, 0x3C800400, ("Q", "post-index"), "valid_but_unimplemented", "asimd", probe_words=(0x3C800400,)),
     # Data processing register.
     Form("dp-reg.addsub-shifted.w", "data processing register", "AddShift", 0x9F200000, 0x0B000000, ("sf=W", "S=0/1", "sub=0/1", "LSL/LSR/ASR"), probe_words=_add_shift_probes(0x0b000000)),
     Form("dp-reg.addsub-shifted.x", "data processing register", "AddShift", 0x9F200000, 0x8B000000, ("sf=X", "S=0/1", "sub=0/1", "LSL/LSR/ASR"), probe_words=_add_shift_probes(0x8b000000)),
@@ -142,16 +150,16 @@ INVENTORY: tuple[Form, ...] = (
     Form("dp-reg.addsub-extended.x", "data processing register", "AddExtend", 0x9FE00000, 0x8B200000, ("sf=X", "S=0/1", "sub=0/1", "UXTB..SXTX", "#0..#4"), probe_words=_add_extend_probes(0x8b200000)),
     Form("dp-reg.addsub-carry.w", "data processing register", "AddCarry", 0x9FE0FC00, 0x1A000000, ("sf=W", "S=0/1", "ADC/SBC"), probe_words=_add_carry_probes(0x1a000000)),
     Form("dp-reg.addsub-carry.x", "data processing register", "AddCarry", 0x9FE0FC00, 0x9A000000, ("sf=X", "S=0/1", "ADC/SBC"), probe_words=_add_carry_probes(0x9a000000)),
-    Form("dp-reg.logical-shifted", "data processing register", "LogicalReg", 0x1F000000, 0x0A000000, ("AND/ORR/EOR/ANDS", "W/X", "shift")),
+    Form("dp-reg.logical-shifted", "data processing register", "LogicalReg", 0x1F000000, 0x0A000000, ("AND/ORR/EOR/ANDS", "W/X", "shift"), probe_words=(0x0A000000, 0x2A000000, 0x4A000000, 0x6A000000, 0x8A000000, 0xAA000000, 0xCA000000, 0xEA000000)),
     Form("dp-reg.variable-shift", "data processing register", "VariableShift", 0x7FE0F000, 0x1AC02000, ("LSL/LSR/ASR/ROR", "W/X")),
     Form("dp-imm.bitfield", "data processing immediate", "Bitfield", 0x3F800000, 0x13000000, ("SBFM/UBFM", "W/X")),
     Form("dp-imm.bitfield-bfm", "data processing immediate", "Bitfield", 0x3F800000, 0x33000000, ("BFM", "W/X"), "valid_but_unimplemented"),
     Form("dp-imm.extract", "data processing immediate", "Extract", 0x7FA00000, 0x13800000, ("W/X", "#0..#63")),
-    Form("dp-reg.conditional-select", "data processing register", "Select", 0x3FE00800, 0x1A800000, ("CSEL/CSINC/CSINV/CSNEG", "W/X")),
+    Form("dp-reg.conditional-select", "data processing register", "Select", 0x3FE00800, 0x1A800000, ("CSEL/CSINC/CSINV/CSNEG", "W/X"), probe_words=(0x1A800000, 0x1A800400, 0x5A800000, 0x5A800400, 0x9A800000, 0x9A800400, 0xDA800000, 0xDA800400)),
     Form("dp-reg.signed-multiply-long", "data processing register", "SignedMulLong", 0xFFE0FC00, 0x9B207C00, ("SMULL",)),
-    Form("dp-reg.multiply-add", "data processing register", "MulAdd", 0x7FE00000, 0x1B000000, ("MADD/MSUB", "W/X")),
+    Form("dp-reg.multiply-add", "data processing register", "MulAdd", 0x7FE00000, 0x1B000000, ("MADD/MSUB", "W/X"), probe_words=(0x1B000000, 0x1B008000, 0x9B000000, 0x9B008000)),
     Form("dp-reg.multiply-high", "data processing register", "MulHigh", 0xFF60FC00, 0x9B407C00, ("SMULH/UMULH",), probe_words=_mul_high_probes()),
-    Form("dp-reg.divide", "data processing register", "Divide", 0x7FE0F800, 0x1AC00800, ("UDIV/SDIV", "W/X")),
+    Form("dp-reg.divide", "data processing register", "Divide", 0x7FE0F800, 0x1AC00800, ("UDIV/SDIV", "W/X"), probe_words=(0x1AC00800, 0x1AC00C00, 0x9AC00800, 0x9AC00C00)),
     Form("dp-reg.clz.w", "data processing register", "BitOp", 0xFFFFFC00, 0x5AC01000, ("CLZ", "sf=W"), validation_hint="Clz"),
     Form("dp-reg.clz.x", "data processing register", "BitOp", 0xFFFFFC00, 0xDAC01000, ("CLZ", "sf=X"), validation_hint="Clz"),
     Form("dp-reg.cls.w", "data processing register", "BitOp", 0xFFFFFC00, 0x5AC01400, ("CLS", "sf=W"), "valid_but_unimplemented", validation_hint="Cls", probe_words=(0x5AC01400,)),
@@ -174,6 +182,8 @@ INVENTORY: tuple[Form, ...] = (
     Form("simd.binary.add16b", "AdvSIMD/crypto", "SimdBinary", 0xFFE0FC00, 0x4E228400, ("ADD V.16B",), "valid_but_unimplemented", "asimd", probe_words=(0x4E228420,)),
     Form("simd.binary.add8h", "AdvSIMD/crypto", "SimdBinary", 0xFFE0FC00, 0x4E628400, ("ADD V.8H",), "valid_but_unimplemented", "asimd", probe_words=(0x4E628420,)),
     Form("simd.binary.sub16b", "AdvSIMD/crypto", "SimdBinary", 0xFFE0FC00, 0x6E228400, ("SUB V.16B",), "valid_but_unimplemented", "asimd", probe_words=(0x6E228420,)),
+    Form("simd.binary.sub4s", "AdvSIMD/crypto", "SimdBinary", 0xFFE0FC00, 0x6EA08400, ("SUB V.4S",), "valid_but_unimplemented", "asimd", probe_words=(0x6EA08420,)),
+    Form("simd.binary.mul4s", "AdvSIMD/crypto", "SimdBinary", 0xFFE0FC00, 0x4EA09C00, ("MUL V.4S",), "valid_but_unimplemented", "asimd", probe_words=(0x4EA09C20,)),
     Form("simd.unary.cmeq-zero", "AdvSIMD/crypto", "SimdUnary", 0xFFFFFC00, 0x4E209800, ("CMEQ zero",), feature="asimd", probe_words=(0x4E209800,)),
     Form("simd.unary.uminv", "AdvSIMD/crypto", "SimdUnary", 0xFFFFFC00, 0x6E31A800, ("UMINV",), feature="asimd", probe_words=(0x6E31A800,)),
     Form("simd.unary.addv4s", "AdvSIMD/crypto", "SimdUnary", 0xFFFFFC00, 0x4EB1B800, ("ADDV V.4S",), feature="asimd", probe_words=(0x4EB1B800,)),
@@ -190,6 +200,8 @@ INVENTORY: tuple[Form, ...] = (
     Form("simd.unary.rev64s", "AdvSIMD/crypto", "SimdUnary", 0xFFFFFC00, 0x4EA00800, ("REV64 V.4S",), feature="asimd", probe_words=(0x4EA00800,)),
     Form("simd.table.tbl", "AdvSIMD/crypto", "SimdTable", 0xFFE0FC00, 0x4E000000, ("TBL",), feature="asimd"),
     Form("simd.table.tbx", "AdvSIMD/crypto", "SimdTable", 0xFFE0FC00, 0x4E001000, ("TBX",), feature="asimd", probe_words=(0x4E001000,)),
+    Form("simd.table.tbl8b", "AdvSIMD/crypto", "SimdTable", 0xFFE0FC00, 0x0E000000, ("TBL V.8B",), "valid_but_unimplemented", "asimd", probe_words=(0x0E000000,)),
+    Form("simd.table.tbl-two-register", "AdvSIMD/crypto", "SimdTable", 0xFFE0FC00, 0x4E002000, ("TBL two-register",), "valid_but_unimplemented", "asimd", probe_words=(0x4E002000,)),
     Form("simd.extract", "AdvSIMD/crypto", "SimdExtract", 0xFFE08400, 0x6E000000, ("EXT",), feature="asimd"),
     Form("simd.shift", "AdvSIMD/crypto", "SimdShift", 0xFF80FC00, 0x4F005400, ("SHL 32/64-bit lanes",), feature="asimd", probe_words=(0x4F205400, 0x4F405400)),
     Form("simd.shift-ushr", "AdvSIMD/crypto", "SimdShift", 0xFF80FC00, 0x6F000400, ("USHR 32/64-bit lanes",), feature="asimd", probe_words=(0x6F200400, 0x6F400400)),
@@ -212,6 +224,8 @@ INVENTORY: tuple[Form, ...] = (
     Form("crypto.aes.aesd", "AdvSIMD/crypto", "Aes", 0xFFFFFC00, 0x4E285800, ("AESD",), "implemented", "aes", "Aesd"),
     Form("crypto.aes.aesmc", "AdvSIMD/crypto", "Aes", 0xFFFFFC00, 0x4E286800, ("AESMC",), "implemented", "aes", "Aesmc"),
     Form("crypto.aes.aesimc", "AdvSIMD/crypto", "Aes", 0xFFFFFC00, 0x4E287800, ("AESIMC",), "implemented", "aes", "Aesimc"),
+    Form("crypto.sha1h", "AdvSIMD/crypto", "Sha1h", 0xFFE0FC00, 0x5E020800, ("SHA1H",), "valid_but_unimplemented", "asimd", probe_words=(0x5E020800,)),
+    Form("simd.binary.fadd4s", "AdvSIMD/crypto", "FAdd", 0xFFE0FC00, 0x4E20D400, ("FADD V.4S",), "valid_but_unimplemented", "asimd", probe_words=(0x4E20D400,)),
     Form("crypto.sha2", "AdvSIMD/crypto", "Sha2", 0xFFE0FC00, 0x5E000000, ("SHA1",), "valid_but_unimplemented", "asimd"),
     Form("crypto.sha2.sha256", "AdvSIMD/crypto", "Sha2", 0xFFE0FC00, 0x5E004000, ("SHA256",), "valid_but_unimplemented", "asimd", probe_words=(0x5E004000,)),
 )
@@ -236,7 +250,8 @@ def _hol_non_add_probe(form: Form, coverage_script: str) -> bool:
     tag = _HOL_TAGS.get(form.constructor or "")
     if tag is None:
         return False
-    for match in re.finditer(r"Definition (a64_decode_coverage_probes_\w+)_def:.*?\nEnd", coverage_script, re.S):
+    found_words: set[int] = set()
+    for match in re.finditer(r"Definition (a64_decode_coverage_(?:probes|variants)_\w+)_def:.*?\nEnd", coverage_script, re.S):
         theorem = match.group(1)
         if not re.search(rf"Theorem\s+{re.escape(theorem)}_decode_encode\s*:", coverage_script):
             continue
@@ -249,10 +264,12 @@ def _hol_non_add_probe(form: Form, coverage_script: str) -> bool:
         if not re.search(rf"\n\s+{re.escape(theorem)}\s*(?:\n|$)", theorem_block):
             continue
         definition = match.group(0)
-        if all(re.search(rf"\(0x{word:08x}w\s*,\s*{tag}w\)", definition, re.I)
-               for word in _probe_words(form)):
-            return True
-    return False
+        found_words.update(
+            int(value, 16)
+            for value, row_tag in re.findall(r"\(0x([0-9a-f]+)w\s*,\s*(\d+)w\)", definition, re.I)
+            if int(row_tag) == tag
+        )
+    return all(word in found_words for word in _probe_words(form))
 
 
 def _hol_add_probe(form: Form, coverage_script: str) -> bool:
@@ -631,11 +648,9 @@ def _universal_theorems(root: Path, form: Form, decode: bool, hol_execution_prob
         ):
             if re.search(rf"Theorem\s+{theorem}\s*:", coverage_script):
                 sources.append(f"arm64CoverageTheory.{theorem}")
-    crypto = _source(root, "isa/arm64CryptoScript.sml")
-    if form.constructor == "Aes":
-        for theorem in ("aes_word_to_state", "aes_state_to_word"):
-            if re.search(rf"Theorem\s+{theorem}(?:\[simp\])?\s*:", crypto):
-                sources.append(f"arm64CryptoTheory.{theorem}")
+    # AES word/state cancellation laws are shared representation lemmas.  They
+    # are reported by the crypto theory but do not establish any AES opcode's
+    # architectural result, so they must not supply instruction universal credit.
     return sources
 
 
@@ -989,8 +1004,8 @@ def acceptance(root: Path) -> tuple[bool, str]:
     missing = {row["form_id"] for row in regression["rows"] if row["status"] != "implemented"}
     if regression["summary"]["architectural_total"] != baseline_total:
         return False, "ADD acceptance: hiding support changed the architectural denominator"
-    if missing - baseline_missing != {hidden}:
-        return False, f"ADD acceptance: hidden row {hidden} was not the exact new missing row"
+    if missing != baseline_missing | {hidden}:
+        return False, f"ADD acceptance: hidden row {hidden} did not change exactly one missing row"
     explicit_missing = [row for row in baseline["rows"] if row["architectural_status"] == "valid_but_unimplemented"]
     if not explicit_missing or not all(row["status"] != "implemented" and not row["evidence"]["decode"]
                                        for row in explicit_missing):
@@ -1055,6 +1070,8 @@ def print_report(report: dict[str, object]) -> None:
             f"fault_classes={','.join(e['execution_faults']) or 'none'} "
             f"mask={row['mask']} opcode={row['opcode']}"
         )
+        if e["verified_c_contract"]:
+            print(f"  verified_c_contract={','.join(e['universal_contract_sources'])}")
 
 
 def main(argv: list[str]) -> int:

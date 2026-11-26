@@ -100,6 +100,13 @@ class A64CoverageTests(unittest.TestCase):
         )
         row = next(item for item in regression["rows"] if item["form_id"] == hidden)
         self.assertNotEqual(row["status"], "implemented")
+        baseline_missing = {
+            item["form_id"] for item in baseline["rows"] if item["status"] != "implemented"
+        }
+        missing = {
+            item["form_id"] for item in regression["rows"] if item["status"] != "implemented"
+        }
+        self.assertEqual(missing, baseline_missing | {hidden})
 
     def test_valid_unimplemented_forms_are_reported(self):
         report = coverage(ROOT)
@@ -113,6 +120,32 @@ class A64CoverageTests(unittest.TestCase):
         }
         self.assertTrue(missing)
         self.assertTrue(missing <= reported)
+
+    def test_grouped_rows_probe_every_advertised_variant(self):
+        expected_probe_counts = {
+            "branch.unconditional": 2,
+            "branch.conditional": 16,
+            "branch.compare": 4,
+            "branch.test": 4,
+            "dp-imm.pc-relative": 2,
+            "dp-reg.logical-shifted": 8,
+            "dp-reg.conditional-select": 8,
+            "dp-reg.multiply-add": 4,
+            "dp-reg.divide": 4,
+        }
+        for form_id, count in expected_probe_counts.items():
+            form = next(form for form in INVENTORY if form.form_id == form_id)
+            self.assertEqual(len(_probe_words(form)), count, form_id)
+
+    def test_unimplemented_architectural_samples_have_one_partition(self):
+        samples = (
+            0xF8200020, 0xC8A07C00, 0xACC00440, 0xADC00440, 0xAC800440,
+            0x3CE06800, 0x3C800400, 0x6EA08420, 0x4EA09C20, 0x5E020800,
+            0x4E20D400, 0xD53BD040, 0x0E000000, 0x4E002000,
+        )
+        for word in samples:
+            matches = [form.form_id for form in INVENTORY if _encoding_matches(form, word)]
+            self.assertEqual(len(matches), 1, hex(word))
 
 
 if __name__ == "__main__":
