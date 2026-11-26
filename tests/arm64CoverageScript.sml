@@ -1,6 +1,6 @@
 Theory arm64Coverage
-Ancestors arm64Isa
-Libs wordsLib
+Ancestors arm64Isa arm64IsaCv
+Libs cv_transLib wordsLib
 
 (* Fixture-free representative words for every implemented non-ADD row.  Each pair carries an expected HOL constructor tag. *)
 
@@ -933,6 +933,43 @@ Proof
   EVAL_TAC
 QED
 
+Definition a64_decode_coverage_variants_5_def:
+  a64_decode_coverage_variants_5 = [
+     (0x52a00000w, 7w); (0xd2a00000w, 7w);
+     (0xd2c00000w, 7w); (0xd2e00000w, 7w);
+     (0xfa400800w, 8w);
+     (0x39400000w, 15w); (0x79000000w, 15w);
+     (0xb9000000w, 15w); (0xf9000000w, 15w);
+     (0xb9400000w, 15w); (0xf9400000w, 15w);
+     (0x78401441w, 15w); (0xb8401441w, 15w); (0xf8401441w, 15w)]
+End
+
+Theorem a64_decode_coverage_variants_5_decode_encode:
+  EVERY (λ(w,t). case decode armv9_4 w of NONE => F | SOME i => coverage_tag i = t ∧ encode i = SOME w)
+    a64_decode_coverage_variants_5
+Proof
+  EVAL_TAC
+QED
+
+Definition a64_decode_coverage_variants_5b_def:
+  a64_decode_coverage_variants_5b = [
+     (0x78204800w, 16w); (0xb8204800w, 16w); (0xf8204800w, 16w);
+     (0xa8800440w, 17w);
+     (0x1ac02400w, 23w); (0x1ac02800w, 23w); (0x1ac02c00w, 23w);
+     (0x9ac02000w, 23w); (0x9ac02400w, 23w); (0x9ac02800w, 23w);
+     (0x9ac02c00w, 23w);
+     (0x53000000w, 24w); (0x93400000w, 24w); (0xd3400000w, 24w);
+     (0x93c00000w, 25w);
+     (0x4ee0e000w, 41w)]
+End
+
+Theorem a64_decode_coverage_variants_5b_decode_encode:
+  EVERY (λ(w,t). case decode armv9_4 w of NONE => F | SOME i => coverage_tag i = t ∧ encode i = SOME w)
+    a64_decode_coverage_variants_5b
+Proof
+  EVAL_TAC
+QED
+
 
 (* Valid architectural encodings intentionally unimplemented by arm64Isa. *)
 Definition a64_decode_unimplemented_probes_1_def:
@@ -1073,13 +1110,37 @@ Definition a64_decode_unimplemented_probes_8_def:
      (0x4ea09c20w);
      (0x0e000000w);
      (0x4e002000w);
-     (0x5e020800w);
+     (0x5e280800w);
      (0x4e20d400w);
      (0xd53bd040w)]
 End
 
 Theorem a64_decode_unimplemented_probes_8_none:
   EVERY (λw. decode armv9_4 w = NONE) a64_decode_unimplemented_probes_8
+Proof
+  EVAL_TAC
+QED
+
+Definition a64_decode_unimplemented_probes_9_def:
+  a64_decode_unimplemented_probes_9 = [
+     (0xd51bd040w);
+     (0xb8200020w);
+     (0xb8210062w);
+     (0xc8a17c00w);
+     (0x88a17c62w);
+     (0xacc10840w);
+     (0xacff0440w);
+     (0xadc10840w);
+     (0xadff0440w);
+     (0xac810840w);
+     (0x3c810c20w);
+     (0xdac00800w);
+     (0x5e280800w);
+     (0x6e22dc20w)]
+End
+
+Theorem a64_decode_unimplemented_probes_9_none:
+  EVERY (λw. decode armv9_4 w = NONE) a64_decode_unimplemented_probes_9
 Proof
   EVAL_TAC
 QED
@@ -1153,3 +1214,12 @@ Theorem a64_decode_coverage_probes_crc32_variants_decode_encode:
 Proof
   EVAL_TAC
 QED
+
+(* cv_eval-backed witnesses keep the inventory's denominator independent of
+   compiler bytes.  The Python checker fingerprints these theorem names and
+   uses the declarative probe rows for the remaining partitions. *)
+val coverage_feature = rhs (concl (EVAL ``armv9_4``));
+val cov_decode_some = cv_eval ``decode ^coverage_feature 0x11000000w``;
+val _ = save_thm ("cov_decode_some", cov_decode_some);
+val cov_decode_none = cv_eval ``decode ^coverage_feature 0xd51bd040w``;
+val _ = save_thm ("cov_decode_none", cov_decode_none);

@@ -70,6 +70,7 @@ class A64CoverageTests(unittest.TestCase):
         self.assertFalse(_encoding_matches(extended_w, 0x0B201400))
         self.assertFalse(_encoding_matches(extended_x, 0x8B201400))
         move_wide = next(row for row in report["rows"] if row["form_id"] == "dp-imm.move-wide-zero.w")
+        self.assertFalse(_encoding_matches(next(form for form in INVENTORY if form.form_id == "dp-imm.move-wide-zero.w"), 0x52C00000))
         self.assertFalse(move_wide["evidence"]["universal_sources"])
         self.assertIn("arm64IsaTheory.encode_of_decode", move_wide["evidence"]["definition_sources"])
         literal_row = next(row for row in report["rows"] if row["form_id"] == "load-store.literal")
@@ -123,6 +124,9 @@ class A64CoverageTests(unittest.TestCase):
 
     def test_grouped_rows_probe_every_advertised_variant(self):
         expected_probe_counts = {
+            "dp-imm.move-wide-zero.w": 2,
+            "dp-imm.move-wide-zero.x": 4,
+            "dp-reg.compare-immediate": 2,
             "branch.unconditional": 2,
             "branch.conditional": 16,
             "branch.compare": 4,
@@ -132,6 +136,14 @@ class A64CoverageTests(unittest.TestCase):
             "dp-reg.conditional-select": 8,
             "dp-reg.multiply-add": 4,
             "dp-reg.divide": 4,
+            "load-store.single-immediate-scaled": 7,
+            "load-store.single-immediate-unscaled": 4,
+            "load-store.single-register": 4,
+            "load-store.pair": 2,
+            "dp-reg.variable-shift": 8,
+            "dp-imm.bitfield": 4,
+            "dp-imm.extract": 2,
+            "crypto.pmull": 2,
         }
         for form_id, count in expected_probe_counts.items():
             form = next(form for form in INVENTORY if form.form_id == form_id)
@@ -140,7 +152,7 @@ class A64CoverageTests(unittest.TestCase):
     def test_unimplemented_architectural_samples_have_one_partition(self):
         samples = (
             0xF8200020, 0xC8A07C00, 0xACC00440, 0xADC00440, 0xAC800440,
-            0x3CE06800, 0x3C800400, 0x6EA08420, 0x4EA09C20, 0x5E020800,
+            0x3CE06800, 0x3C800400, 0x6EA08420, 0x4EA09C20, 0x5E280800,
             0x4E20D400, 0xD53BD040, 0x0E000000, 0x4E002000,
         )
         for word in samples:

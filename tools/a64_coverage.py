@@ -19,9 +19,9 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable
 
-INVENTORY_VERSION = "a64-el0-v1.1-armv9.4"
+INVENTORY_VERSION = "a64-el0-v1.2-armv9.4"
 INVENTORY_SOURCE = "Arm DDI 0487 and DDI 0602 A64 instruction descriptions"
-ARCHITECTURAL_TOTAL = 141
+ARCHITECTURAL_TOTAL = 145
 
 
 @dataclass(frozen=True)
@@ -37,6 +37,8 @@ class Form:
     validation_hint: str = ""
     probe_words: tuple[int, ...] = ()
     encoding_partitions: tuple[tuple[int, int], ...] = ()
+    field_constraints: tuple[tuple[int, int, tuple[int, ...]], ...] = ()
+    excluded_partitions: tuple[tuple[int, int], ...] = ()
 
 
 def _add_imm_probes(base: int) -> tuple[int, ...]:
@@ -73,6 +75,14 @@ def _crc32_probes() -> tuple[int, ...]:
     )
 
 
+def _crc32_partitions() -> tuple[tuple[int, int], ...]:
+    return tuple(
+        (0xFFE0FC00, 0x1AC04000 | (castagnoli << 12) | (size << 10)
+         | ((size == 3) << 31))
+        for castagnoli in (0, 1) for size in range(4)
+    )
+
+
 def _mul_high_probes() -> tuple[int, ...]:
     return (0x9B407C00, 0x9BC07C00)
 
@@ -85,11 +95,11 @@ INVENTORY: tuple[Form, ...] = (
     # Data processing immediate.
     Form("dp-imm.addsub-immediate.w", "data processing immediate", "AddImm", 0x9F800000, 0x11000000, ("sf=W", "S=0/1", "sub=0/1", "shift=0/12"), probe_words=_add_imm_probes(0x11000000)),
     Form("dp-imm.addsub-immediate.x", "data processing immediate", "AddImm", 0x9F800000, 0x91000000, ("sf=X", "S=0/1", "sub=0/1", "shift=0/12"), probe_words=_add_imm_probes(0x91000000)),
-    Form("dp-imm.move-wide-zero.w", "data processing immediate", "MoveZero", 0xFF800000, 0x52800000, ("MOVZ", "sf=W", "hw=0/1")),
-    Form("dp-imm.move-wide-zero.x", "data processing immediate", "MoveZero", 0xFF800000, 0xD2800000, ("MOVZ", "sf=X", "hw=0/1/2/3"), probe_words=(0xD2800000,)),
+    Form("dp-imm.move-wide-zero.w", "data processing immediate", "MoveZero", 0xFF800000, 0x52800000, ("MOVZ", "sf=W", "hw=0/1"), probe_words=(0x52800000, 0x52A00000), field_constraints=((21, 2, (0, 1)),)),
+    Form("dp-imm.move-wide-zero.x", "data processing immediate", "MoveZero", 0xFF800000, 0xD2800000, ("MOVZ", "sf=X", "hw=0/1/2/3"), probe_words=(0xD2800000, 0xD2A00000, 0xD2C00000, 0xD2E00000), field_constraints=((21, 2, (0, 1, 2, 3)),)),
     Form("dp-imm.move-wide-not", "data processing immediate", "MoveNot", 0x7F800000, 0x12800000, ("MOVN", "sf=W/X", "hw=0/1"), "valid_but_unimplemented"),
     Form("dp-imm.move-wide-keep", "data processing immediate", "MoveKeep", 0x7F800000, 0x72800000, ("MOVK", "sf=W/X", "hw=0/1"), "valid_but_unimplemented"),
-    Form("dp-reg.compare-immediate", "data processing register", "CompareImm", 0x7FE00C10, 0x7A400800, ("sf=W/X", "condition", "NZCV")),
+    Form("dp-reg.compare-immediate", "data processing register", "CompareImm", 0x7FE00C10, 0x7A400800, ("sf=W/X", "condition", "NZCV"), probe_words=(0x7A400800, 0xFA400800)),
     Form("dp-imm.pc-relative", "data processing immediate", "PcAddress", 0x1F000000, 0x10000000, ("ADR/ADRP", "sf=0/1"), probe_words=(0x10000000, 0x90000000)),
     Form("dp-imm.logical-mask-and", "data processing immediate", "LogicalMask", 0x7F800000, 0x12000000, ("AND W/X logical immediate", "modeled literals: 0x92400000, 0x92400c00, 0x12001400, 0x12001800, 0x92401800"), "partially_implemented", probe_words=(0x92400000, 0x92400C00, 0x12001400, 0x12001800, 0x92401800)),
     Form("dp-imm.logical-mask-orr", "data processing immediate", "LogicalMask", 0x7F800000, 0x32000000, ("ORR W/X logical immediate", "modeled literal: 0x321a6400"), "partially_implemented", probe_words=(0x321A6400,)),
@@ -99,7 +109,7 @@ INVENTORY: tuple[Form, ...] = (
     Form("dp-imm.test-low-mask-byte", "data processing immediate", "TstLowMask", 0xFFFFFC1F, 0x72001C1F, ("byte",), validation_hint="TstLowMask F"),
     Form("dp-imm.test-low-mask-halfword", "data processing immediate", "TstLowMask", 0xFFFFFC1F, 0x72003C1F, ("halfword",), validation_hint="TstLowMask T"),
     Form("dp-imm.logical-immediate-eor", "data processing immediate", "LogicalImmediateEor", 0x7F800000, 0x52000000, ("EOR W/X logical immediate",), "valid_but_unimplemented"),
-    Form("dp-imm.logical-immediate-ands", "data processing immediate", "LogicalImmediateAnds", 0x7F800000, 0x72000000, ("ANDS W/X logical immediate",), "valid_but_unimplemented", probe_words=(0x72000000,)),
+    Form("dp-imm.logical-immediate-ands", "data processing immediate", "LogicalImmediateAnds", 0x7F800000, 0x72000000, ("ANDS W/X logical immediate",), "valid_but_unimplemented", probe_words=(0x72000000,), excluded_partitions=((0xFFFFFC1F, 0x72001C1F), (0xFFFFFC1F, 0x72003C1F))),
     # Branches and EL0 system instructions.
     Form("branch.unconditional", "branches/system EL0", "BranchImm", 0x7C000000, 0x14000000, ("B/BL",), probe_words=(0x14000000, 0x94000000)),
     Form("branch.conditional", "branches/system EL0", "BCond", 0xFF000010, 0x54000000, ("16 conditions",), probe_words=tuple(0x54000000 | condition for condition in range(16))),
@@ -112,6 +122,7 @@ INVENTORY: tuple[Form, ...] = (
     Form("system.svc", "branches/system EL0", "Svc", 0xFFE0001F, 0xD4000001, ("imm16",), "valid_but_unimplemented"),
     Form("system.brk", "branches/system EL0", "Brk", 0xFFE0001F, 0xD4200000, ("imm16",), "valid_but_unimplemented", probe_words=(0xD4200000,)),
     Form("system.register-read", "branches/system EL0", "SystemRegRead", 0xFFE00000, 0xD5200000, ("MRS TPIDR_EL0",), "valid_but_unimplemented", probe_words=(0xD53BD040,)),
+    Form("system.register-write", "branches/system EL0", "SystemRegWrite", 0xFFE00000, 0xD5000000, ("MSR TPIDR_EL0",), "valid_but_unimplemented", probe_words=(0xD51BD040,)),
     Form("system.hint-yield", "branches/system EL0", "Hint", 0xFFFFFFFF, 0xD503203F, ("YIELD",), "valid_but_unimplemented"),
     Form("system.hint-wfe", "branches/system EL0", "Hint", 0xFFFFFFFF, 0xD503205F, ("WFE",), "valid_but_unimplemented"),
     Form("system.hint-wfi", "branches/system EL0", "Hint", 0xFFFFFFFF, 0xD503207F, ("WFI",), "valid_but_unimplemented"),
@@ -121,11 +132,11 @@ INVENTORY: tuple[Form, ...] = (
     Form("system.barrier-dsb", "branches/system EL0", "Barrier", 0xFFFFF0FF, 0xD503309F, ("DSB",), "valid_but_unimplemented"),
     Form("system.barrier-isb", "branches/system EL0", "Barrier", 0xFFFFF0FF, 0xD50330DF, ("ISB",), "valid_but_unimplemented"),
     # Loads and stores.
-    Form("load-store.single-immediate-scaled", "loads/stores", "MemImm", 0x3F800000, 0x39000000, ("B/H/W/X", "scaled unsigned offset")),
-    Form("load-store.single-immediate-unscaled", "loads/stores", "MemImm", 0x3FA00000, 0x38000000, ("B/H/W/X", "unscaled/pre/post-index"), probe_words=(0x38401441,)),
+    Form("load-store.single-immediate-scaled", "loads/stores", "MemImm", 0x3F800000, 0x39000000, ("B/H/W/X", "scaled unsigned offset"), probe_words=(0x39000000, 0x79000000, 0xB9000000, 0xF9000000, 0x39400000, 0xB9400000, 0xF9400000)),
+    Form("load-store.single-immediate-unscaled", "loads/stores", "MemImm", 0x3FA00000, 0x38000000, ("B/H/W/X", "unscaled/pre/post-index"), probe_words=(0x38401441, 0x78401441, 0xB8401441, 0xF8401441), field_constraints=((10, 2, (0, 1, 3)),)),
     Form("load-store.single-unprivileged", "loads/stores", "MemImm", 0x3FA00C00, 0x38000800, ("B/H/W/X", "unprivileged"), "valid_but_unimplemented", probe_words=(0x38000820,)),
-    Form("load-store.single-register", "loads/stores", "MemReg", 0x3FA00C00, 0x38200800, ("B/H/W/X", "extend/shift"), probe_words=(0x38204800,)),
-    Form("load-store.pair", "loads/stores", "MemPair", 0x7E000000, 0x28000000, ("W/X", "offset/pre/post-index"), probe_words=(0x28800440,)),
+    Form("load-store.single-register", "loads/stores", "MemReg", 0x3FA00C00, 0x38200800, ("B/H/W/X", "extend/shift"), probe_words=(0x38204800, 0x78204800, 0xB8204800, 0xF8204800)),
+    Form("load-store.pair", "loads/stores", "MemPair", 0x7E000000, 0x28000000, ("W/X", "offset/pre/post-index"), probe_words=(0x28800440, 0xA8800440), field_constraints=((23, 2, (1, 2, 3)),)),
     Form("load-store.pair-nontemporal", "loads/stores", "MemPair", 0x7F800000, 0x28000000, ("LDNP/STNP",), "valid_but_unimplemented", probe_words=(0xA8000440,)),
     Form("load-store.q-pair-load", "loads/stores", "LdpQ", 0xFFC00000, 0xAD400000, ("Q", "offset"), feature="asimd", probe_words=(0xAD400440,)),
     Form("load-store.q-pair-store", "loads/stores", "StpQ", 0xFFC00000, 0xAD000000, ("Q", "offset"), feature="asimd"),
@@ -136,25 +147,26 @@ INVENTORY: tuple[Form, ...] = (
     Form("load-store.literal", "loads/stores", "LdrLiteral", 0xFF000000, 0x18000000, ("LDR literal", "W/X/LDRSW/S/D/Q"), "valid_but_unimplemented", probe_words=(0x18000000, 0x58000000, 0x98000000, 0x1C000000, 0x5C000000, 0x9C000000), encoding_partitions=((0xFF000000, 0x18000000), (0xFF000000, 0x58000000), (0xFF000000, 0x98000000), (0xFF000000, 0x1C000000), (0xFF000000, 0x5C000000), (0xFF000000, 0x9C000000))),
     Form("load-store.exclusive", "loads/stores", "Exclusive", 0x3F20FC00, 0x08007C00, ("LDXR/STXR", "B/H/W/X"), "valid_but_unimplemented"),
     Form("load-store.acquire-release", "loads/stores", "AcquireRelease", 0x3F20FC00, 0x0800FC00, ("LDAXR/STLXR", "B/H/W/X"), "valid_but_unimplemented"),
-    Form("load-store.atomic-add", "loads/stores", "Atomic", 0xFFE0FC00, 0xF8200000, ("LDADD", "B/H/W/X"), "valid_but_unimplemented", probe_words=(0xF8200020,)),
-    Form("load-store.atomic-compare-swap", "loads/stores", "AtomicCompareSwap", 0xFFFFFC00, 0xC8A07C00, ("CAS", "W/X"), "valid_but_unimplemented", probe_words=(0xC8A07C00,)),
-    Form("load-store.q-pair-load-post", "loads/stores", "LdpQ", 0xFFE00C00, 0xACC00400, ("Q", "post-index"), "valid_but_unimplemented", "asimd", probe_words=(0xACC00440,)),
-    Form("load-store.q-pair-load-pre", "loads/stores", "LdpQ", 0xFFE00C00, 0xADC00400, ("Q", "pre-index"), "valid_but_unimplemented", "asimd", probe_words=(0xADC00440,)),
-    Form("load-store.q-pair-store-post", "loads/stores", "StpQ", 0xFFE00C00, 0xAC800400, ("Q", "post-index"), "valid_but_unimplemented", "asimd", probe_words=(0xAC800440,)),
-    Form("load-store.q-register-load", "loads/stores", "LdrQ", 0xFFE0FC00, 0x3CE06800, ("Q", "register offset"), "valid_but_unimplemented", "asimd", probe_words=(0x3CE06800,)),
+    Form("load-store.atomic-add", "loads/stores", "Atomic", 0x3F20FC00, 0x38200000, ("LDADD", "B/H/W/X"), "valid_but_unimplemented", probe_words=(0xF8200020, 0xB8200020, 0xB8210062)),
+    Form("load-store.atomic-compare-swap", "loads/stores", "AtomicCompareSwap", 0x3F20FC00, 0x08207C00, ("CAS", "W/X"), "valid_but_unimplemented", probe_words=(0xC8A07C00, 0xC8A17C00, 0x88A17C62)),
+    Form("load-store.q-pair-load-post", "loads/stores", "LdpQ", 0xFFC00000, 0xACC00000, ("Q", "post-index"), "valid_but_unimplemented", "asimd", probe_words=(0xACC00440, 0xACC10840, 0xACFF0440)),
+    Form("load-store.q-pair-load-pre", "loads/stores", "LdpQ", 0xFFC00000, 0xADC00000, ("Q", "pre-index"), "valid_but_unimplemented", "asimd", probe_words=(0xADC00440, 0xADC10840, 0xADFF0440)),
+    Form("load-store.q-pair-store-post", "loads/stores", "StpQ", 0xFFC00000, 0xAC800000, ("Q", "post-index"), "valid_but_unimplemented", "asimd", probe_words=(0xAC800440, 0xAC810840)),
+    Form("load-store.q-register-load", "loads/stores", "LdrQ", 0xFFE00C00, 0x3CE06800, ("Q", "register offset"), "valid_but_unimplemented", "asimd", probe_words=(0x3CE06800,)),
     Form("load-store.q-store-post", "loads/stores", "StrQ", 0xFFE00C00, 0x3C800400, ("Q", "post-index"), "valid_but_unimplemented", "asimd", probe_words=(0x3C800400,)),
+    Form("load-store.q-store-pre", "loads/stores", "StrQ", 0xFFE00C00, 0x3C800C00, ("Q", "pre-index"), "valid_but_unimplemented", "asimd", probe_words=(0x3C810C20,)),
     # Data processing register.
-    Form("dp-reg.addsub-shifted.w", "data processing register", "AddShift", 0x9F200000, 0x0B000000, ("sf=W", "S=0/1", "sub=0/1", "LSL/LSR/ASR"), probe_words=_add_shift_probes(0x0b000000)),
-    Form("dp-reg.addsub-shifted.x", "data processing register", "AddShift", 0x9F200000, 0x8B000000, ("sf=X", "S=0/1", "sub=0/1", "LSL/LSR/ASR"), probe_words=_add_shift_probes(0x8b000000)),
-    Form("dp-reg.addsub-extended.w", "data processing register", "AddExtend", 0x9FE00000, 0x0B200000, ("sf=W", "S=0/1", "sub=0/1", "UXTB..SXTX", "#0..#4"), probe_words=_add_extend_probes(0x0b200000)),
-    Form("dp-reg.addsub-extended.x", "data processing register", "AddExtend", 0x9FE00000, 0x8B200000, ("sf=X", "S=0/1", "sub=0/1", "UXTB..SXTX", "#0..#4"), probe_words=_add_extend_probes(0x8b200000)),
+    Form("dp-reg.addsub-shifted.w", "data processing register", "AddShift", 0x9F200000, 0x0B000000, ("sf=W", "S=0/1", "sub=0/1", "LSL/LSR/ASR"), probe_words=_add_shift_probes(0x0b000000), field_constraints=((22, 2, (0, 1, 2)), (15, 1, (0,)))),
+    Form("dp-reg.addsub-shifted.x", "data processing register", "AddShift", 0x9F200000, 0x8B000000, ("sf=X", "S=0/1", "sub=0/1", "LSL/LSR/ASR"), probe_words=_add_shift_probes(0x8b000000), field_constraints=((22, 2, (0, 1, 2)),)),
+    Form("dp-reg.addsub-extended.w", "data processing register", "AddExtend", 0x9FE00000, 0x0B200000, ("sf=W", "S=0/1", "sub=0/1", "UXTB..SXTX", "#0..#4"), probe_words=_add_extend_probes(0x0b200000), field_constraints=((10, 3, (0, 1, 2, 3, 4)),)),
+    Form("dp-reg.addsub-extended.x", "data processing register", "AddExtend", 0x9FE00000, 0x8B200000, ("sf=X", "S=0/1", "sub=0/1", "UXTB..SXTX", "#0..#4"), probe_words=_add_extend_probes(0x8b200000), field_constraints=((10, 3, (0, 1, 2, 3, 4)),)),
     Form("dp-reg.addsub-carry.w", "data processing register", "AddCarry", 0x9FE0FC00, 0x1A000000, ("sf=W", "S=0/1", "ADC/SBC"), probe_words=_add_carry_probes(0x1a000000)),
     Form("dp-reg.addsub-carry.x", "data processing register", "AddCarry", 0x9FE0FC00, 0x9A000000, ("sf=X", "S=0/1", "ADC/SBC"), probe_words=_add_carry_probes(0x9a000000)),
     Form("dp-reg.logical-shifted", "data processing register", "LogicalReg", 0x1F000000, 0x0A000000, ("AND/ORR/EOR/ANDS", "W/X", "shift"), probe_words=(0x0A000000, 0x2A000000, 0x4A000000, 0x6A000000, 0x8A000000, 0xAA000000, 0xCA000000, 0xEA000000)),
-    Form("dp-reg.variable-shift", "data processing register", "VariableShift", 0x7FE0F000, 0x1AC02000, ("LSL/LSR/ASR/ROR", "W/X")),
-    Form("dp-imm.bitfield", "data processing immediate", "Bitfield", 0x3F800000, 0x13000000, ("SBFM/UBFM", "W/X")),
+    Form("dp-reg.variable-shift", "data processing register", "VariableShift", 0x7FE0F000, 0x1AC02000, ("LSL/LSR/ASR/ROR", "W/X"), probe_words=(0x1AC02000, 0x1AC02400, 0x1AC02800, 0x1AC02C00, 0x9AC02000, 0x9AC02400, 0x9AC02800, 0x9AC02C00)),
+    Form("dp-imm.bitfield", "data processing immediate", "Bitfield", 0x3F800000, 0x13000000, ("SBFM/UBFM", "W/X"), probe_words=(0x13000000, 0x53000000, 0x93400000, 0xD3400000)),
     Form("dp-imm.bitfield-bfm", "data processing immediate", "Bitfield", 0x3F800000, 0x33000000, ("BFM", "W/X"), "valid_but_unimplemented"),
-    Form("dp-imm.extract", "data processing immediate", "Extract", 0x7FA00000, 0x13800000, ("W/X", "#0..#63")),
+    Form("dp-imm.extract", "data processing immediate", "Extract", 0x7FA00000, 0x13800000, ("W/X", "#0..#63"), probe_words=(0x13800000, 0x93C00000)),
     Form("dp-reg.conditional-select", "data processing register", "Select", 0x3FE00800, 0x1A800000, ("CSEL/CSINC/CSINV/CSNEG", "W/X"), probe_words=(0x1A800000, 0x1A800400, 0x5A800000, 0x5A800400, 0x9A800000, 0x9A800400, 0xDA800000, 0xDA800400)),
     Form("dp-reg.signed-multiply-long", "data processing register", "SignedMulLong", 0xFFE0FC00, 0x9B207C00, ("SMULL",)),
     Form("dp-reg.multiply-add", "data processing register", "MulAdd", 0x7FE00000, 0x1B000000, ("MADD/MSUB", "W/X"), probe_words=(0x1B000000, 0x1B008000, 0x9B000000, 0x9B008000)),
@@ -170,6 +182,7 @@ INVENTORY: tuple[Form, ...] = (
     Form("dp-reg.rev.x", "data processing register", "BitOp", 0xFFFFFC00, 0xDAC00C00, ("REV", "sf=X"), validation_hint="Rev"),
     Form("dp-reg.rev16.w", "data processing register", "BitOp", 0xFFFFFC00, 0x5AC00400, ("REV16", "sf=W"), "valid_but_unimplemented", validation_hint="Rev16", probe_words=(0x5AC00400,)),
     Form("dp-reg.rev16.x", "data processing register", "BitOp", 0xFFFFFC00, 0xDAC00400, ("REV16", "sf=X"), "valid_but_unimplemented", validation_hint="Rev16", probe_words=(0xDAC00400,)),
+    Form("dp-reg.rev32.x", "data processing register", "BitOp", 0xFFFFFC00, 0xDAC00800, ("REV32", "sf=X"), "valid_but_unimplemented", validation_hint="Rev32", probe_words=(0xDAC00800,)),
     Form("dp-reg.ccmp", "data processing register", "Ccmp", 0x7FE00C10, 0x7A400000, ("CCMP", "W/X"), "valid_but_unimplemented"),
     # AdvSIMD and crypto.
     Form("simd.movi-zero", "AdvSIMD/crypto", "MoviZero", 0xFFFFFFE0, 0x6F00E400, ("MOVI Vd.2D,#0",), feature="asimd"),
@@ -203,29 +216,30 @@ INVENTORY: tuple[Form, ...] = (
     Form("simd.table.tbl8b", "AdvSIMD/crypto", "SimdTable", 0xFFE0FC00, 0x0E000000, ("TBL V.8B",), "valid_but_unimplemented", "asimd", probe_words=(0x0E000000,)),
     Form("simd.table.tbl-two-register", "AdvSIMD/crypto", "SimdTable", 0xFFE0FC00, 0x4E002000, ("TBL two-register",), "valid_but_unimplemented", "asimd", probe_words=(0x4E002000,)),
     Form("simd.extract", "AdvSIMD/crypto", "SimdExtract", 0xFFE08400, 0x6E000000, ("EXT",), feature="asimd"),
-    Form("simd.shift", "AdvSIMD/crypto", "SimdShift", 0xFF80FC00, 0x4F005400, ("SHL 32/64-bit lanes",), feature="asimd", probe_words=(0x4F205400, 0x4F405400)),
-    Form("simd.shift-ushr", "AdvSIMD/crypto", "SimdShift", 0xFF80FC00, 0x6F000400, ("USHR 32/64-bit lanes",), feature="asimd", probe_words=(0x6F200400, 0x6F400400)),
-    Form("simd.shift-sri", "AdvSIMD/crypto", "SimdShift", 0xFF80FC00, 0x6F004400, ("SRI 32/64-bit lanes",), feature="asimd", probe_words=(0x6F204400, 0x6F404400)),
-    Form("simd.shift.shl-16", "AdvSIMD/crypto", "SimdShift", 0xFF80FC00, 0x4F005400, ("SHL 16-bit lanes",), "valid_but_unimplemented", "asimd", probe_words=(0x4F105400,)),
-    Form("simd.shift.shl-8", "AdvSIMD/crypto", "SimdShift", 0xFF80FC00, 0x4F005400, ("SHL 8-bit lanes",), "valid_but_unimplemented", "asimd", probe_words=(0x4F085400,)),
-    Form("simd.shift.ushr-16", "AdvSIMD/crypto", "SimdShift", 0xFF80FC00, 0x6F000400, ("USHR 16-bit lanes",), "valid_but_unimplemented", "asimd", probe_words=(0x6F100400,)),
-    Form("simd.shift.ushr-8", "AdvSIMD/crypto", "SimdShift", 0xFF80FC00, 0x6F000400, ("USHR 8-bit lanes",), "valid_but_unimplemented", "asimd", probe_words=(0x6F080400,)),
-    Form("simd.shift.sri-16", "AdvSIMD/crypto", "SimdShift", 0xFF80FC00, 0x6F004400, ("SRI 16-bit lanes",), "valid_but_unimplemented", "asimd", probe_words=(0x6F104400,)),
-    Form("simd.shift.sri-8", "AdvSIMD/crypto", "SimdShift", 0xFF80FC00, 0x6F004400, ("SRI 8-bit lanes",), "valid_but_unimplemented", "asimd", probe_words=(0x6F084400,)),
+    Form("simd.shift", "AdvSIMD/crypto", "SimdShift", 0xFF80FC00, 0x4F005400, ("SHL 32/64-bit lanes",), feature="asimd", probe_words=(0x4F205400, 0x4F405400), field_constraints=((16, 7, tuple(range(32, 128))),)),
+    Form("simd.shift-ushr", "AdvSIMD/crypto", "SimdShift", 0xFF80FC00, 0x6F000400, ("USHR 32/64-bit lanes",), feature="asimd", probe_words=(0x6F200400, 0x6F400400), field_constraints=((16, 7, tuple(range(32, 128))),)),
+    Form("simd.shift-sri", "AdvSIMD/crypto", "SimdShift", 0xFF80FC00, 0x6F004400, ("SRI 32/64-bit lanes",), feature="asimd", probe_words=(0x6F204400, 0x6F404400), field_constraints=((16, 7, tuple(range(32, 128))),)),
+    Form("simd.shift.shl-16", "AdvSIMD/crypto", "SimdShift", 0xFF80FC00, 0x4F005400, ("SHL 16-bit lanes",), "valid_but_unimplemented", "asimd", probe_words=(0x4F105400,), field_constraints=((16, 7, tuple(range(16, 32))),)),
+    Form("simd.shift.shl-8", "AdvSIMD/crypto", "SimdShift", 0xFF80FC00, 0x4F005400, ("SHL 8-bit lanes",), "valid_but_unimplemented", "asimd", probe_words=(0x4F085400,), field_constraints=((16, 7, tuple(range(8, 16))),)),
+    Form("simd.shift.ushr-16", "AdvSIMD/crypto", "SimdShift", 0xFF80FC00, 0x6F000400, ("USHR 16-bit lanes",), "valid_but_unimplemented", "asimd", probe_words=(0x6F100400,), field_constraints=((16, 7, tuple(range(16, 32))),)),
+    Form("simd.shift.ushr-8", "AdvSIMD/crypto", "SimdShift", 0xFF80FC00, 0x6F000400, ("USHR 8-bit lanes",), "valid_but_unimplemented", "asimd", probe_words=(0x6F080400,), field_constraints=((16, 7, tuple(range(8, 16))),)),
+    Form("simd.shift.sri-16", "AdvSIMD/crypto", "SimdShift", 0xFF80FC00, 0x6F004400, ("SRI 16-bit lanes",), "valid_but_unimplemented", "asimd", probe_words=(0x6F104400,), field_constraints=((16, 7, tuple(range(16, 32))),)),
+    Form("simd.shift.sri-8", "AdvSIMD/crypto", "SimdShift", 0xFF80FC00, 0x6F004400, ("SRI 8-bit lanes",), "valid_but_unimplemented", "asimd", probe_words=(0x6F084400,), field_constraints=((16, 7, tuple(range(8, 16))),)),
     Form("simd.transfer.fmov-w", "AdvSIMD/crypto", "SimdTransfer", 0xFFFFFC00, 0x1E260000, ("FMOV W",), feature="asimd"),
     Form("simd.transfer.fmov-x", "AdvSIMD/crypto", "SimdTransfer", 0xFFFFFC00, 0x9E660000, ("FMOV X",), feature="asimd", probe_words=(0x9E660000,)),
     Form("simd.transfer.umov-b0", "AdvSIMD/crypto", "SimdTransfer", 0xFFFFFC00, 0x0E013C00, ("UMOV B[0]",), feature="asimd", probe_words=(0x0E013C00,)),
     Form("simd.transfer.umov-d1", "AdvSIMD/crypto", "SimdTransfer", 0xFFFFFC00, 0x4E183C00, ("UMOV D[1]",), feature="asimd", probe_words=(0x4E183C00,)),
     Form("simd.transfer.dup2d", "AdvSIMD/crypto", "SimdTransfer", 0xFFFFFC00, 0x4E080C00, ("DUP 2D",), feature="asimd", probe_words=(0x4E080C00,)),
     Form("simd.transfer.fmov-to-d", "AdvSIMD/crypto", "SimdTransfer", 0xFFFFFC00, 0x9E670000, ("FMOV D",), feature="asimd", probe_words=(0x9E670000,)),
-    Form("crypto.crc32", "AdvSIMD/crypto", "Crc32", 0x7FE0E000, 0x1AC04000, ("CRC32/CRC32C", "B/H/W/X", "sf=0 for B/H/W, sf=1 for X"), feature="crc32", probe_words=_crc32_probes()),
-    Form("crypto.pmull", "AdvSIMD/crypto", "Pmull", 0xBFE0FC00, 0x0EE0E000, ("PMULL/PMULL2",), feature="pmull"),
+    Form("crypto.crc32", "AdvSIMD/crypto", "Crc32", 0x7FE0E000, 0x1AC04000, ("CRC32/CRC32C", "B/H/W/X", "sf=0 for B/H/W, sf=1 for X"), feature="crc32", probe_words=_crc32_probes(), encoding_partitions=_crc32_partitions()),
+    Form("crypto.pmull", "AdvSIMD/crypto", "Pmull", 0xBFE0FC00, 0x0EE0E000, ("PMULL/PMULL2",), feature="pmull", probe_words=(0x0EE0E000, 0x4EE0E000)),
     Form("crypto.aes.aese", "AdvSIMD/crypto", "Aes", 0xFFFFFC00, 0x4E284800, ("AESE",), "implemented", "aes", "Aese"),
     Form("crypto.aes.aesd", "AdvSIMD/crypto", "Aes", 0xFFFFFC00, 0x4E285800, ("AESD",), "implemented", "aes", "Aesd"),
     Form("crypto.aes.aesmc", "AdvSIMD/crypto", "Aes", 0xFFFFFC00, 0x4E286800, ("AESMC",), "implemented", "aes", "Aesmc"),
     Form("crypto.aes.aesimc", "AdvSIMD/crypto", "Aes", 0xFFFFFC00, 0x4E287800, ("AESIMC",), "implemented", "aes", "Aesimc"),
-    Form("crypto.sha1h", "AdvSIMD/crypto", "Sha1h", 0xFFE0FC00, 0x5E020800, ("SHA1H",), "valid_but_unimplemented", "asimd", probe_words=(0x5E020800,)),
+    Form("crypto.sha1h", "AdvSIMD/crypto", "Sha1h", 0xFFFFFC00, 0x5E280800, ("SHA1H",), "valid_but_unimplemented", "asimd", probe_words=(0x5E280800,)),
     Form("simd.binary.fadd4s", "AdvSIMD/crypto", "FAdd", 0xFFE0FC00, 0x4E20D400, ("FADD V.4S",), "valid_but_unimplemented", "asimd", probe_words=(0x4E20D400,)),
+    Form("simd.binary.fmul4s", "AdvSIMD/crypto", "FMul", 0xFFE0FC00, 0x6E20DC00, ("FMUL V.4S",), "valid_but_unimplemented", "asimd", probe_words=(0x6E22DC20,)),
     Form("crypto.sha2", "AdvSIMD/crypto", "Sha2", 0xFFE0FC00, 0x5E000000, ("SHA1",), "valid_but_unimplemented", "asimd"),
     Form("crypto.sha2.sha256", "AdvSIMD/crypto", "Sha2", 0xFFE0FC00, 0x5E004000, ("SHA256",), "valid_but_unimplemented", "asimd", probe_words=(0x5E004000,)),
 )
@@ -310,6 +324,7 @@ def _hol_probe(form: Form, coverage_script: str) -> bool:
 def _hol_negative_probe(form: Form, coverage_script: str) -> bool:
     if form.architectural_status != "valid_but_unimplemented":
         return False
+    found: set[int] = set()
     for match in re.finditer(
         r"Definition (a64_decode_unimplemented_probes_\d+)_def:.*?\nEnd",
         coverage_script,
@@ -321,24 +336,28 @@ def _hol_negative_probe(form: Form, coverage_script: str) -> bool:
             continue
         if not re.search(rf"\)\s+{re.escape(name)}\s*(?:\n|$)", theorem_block):
             continue
-        if all(_hex_word(definition, word) for word in _probe_words(form)):
-            return True
-    return False
+        found.update(word for word in _probe_words(form) if _hex_word(definition, word))
+    return set(_probe_words(form)) <= found
 
 
 def _hol_execution_probe(form: Form, coverage_script: str, execution_clause: str) -> bool:
     if not execution_clause:
         return False
     if form.constructor in ADD_CONSTRUCTORS:
-        theorem = _block(coverage_script, "Theorem add_execute_with_forms:")
+        theorem = _theorem_block(coverage_script, "add_execute_with_forms")
         required = (
             theorem,
-            _block(coverage_script, "Theorem write_arith_flagged_outcome:"),
-            _block(coverage_script, "Theorem write_arith_gpr_result:"),
-            _block(coverage_script, "Theorem write_arith_sp_result:"),
-            _block(coverage_script, "Theorem write_arith_unflagged_nzcv:"),
+            _theorem_block(coverage_script, "write_arith_flagged_outcome"),
+            _theorem_block(coverage_script, "write_arith_gpr_result"),
+            _theorem_block(coverage_script, "write_arith_sp_result"),
+            _theorem_block(coverage_script, "write_arith_unflagged_nzcv"),
         )
-        return _contains_word(theorem, f"Add{form.constructor[3:]}") and all(required)
+        shapes = (r"\.nzcv\s*=", r"\.regs\s*=", r"\.sp\s*=", r"\.nzcv\s*=\s*s\.nzcv")
+        return (
+            _contains_word(theorem, f"Add{form.constructor[3:]}")
+            and all(required)
+            and all(re.search(shape, block) for shape, block in zip(shapes, required[1:]))
+        )
     # The coverage theory currently proves execution equations only for the
     # integer ADD family.  A source-level execute_with equation is still
     # useful evidence, but it is not a HOL execution probe.
@@ -414,6 +433,15 @@ def _block(text: str, start: str, end: str = "End") -> str:
     return text[begin:] if finish < 0 else text[begin:finish]
 
 
+def _theorem_block(text: str, name: str) -> str:
+    match = re.search(
+        rf"Theorem\s+{re.escape(name)}\s*(?:\[[^]]*\])?\s*:.*?\nQED",
+        text,
+        re.S,
+    )
+    return match.group(0) if match else ""
+
+
 def _constructors(isa: str) -> set[str]:
     match = re.search(r"arm64_instr\s*=\s*(.*?)\nEnd", isa, re.S)
     if not match:
@@ -462,34 +490,13 @@ def _encoding_matches(form: Form, word: int) -> bool:
     partitions = form.encoding_partitions or ((form.mask, form.opcode),)
     if not any((word & mask) == (opcode & mask) for mask, opcode in partitions):
         return False
-    if form.constructor == "LdrLiteral":
-        return True
-    if form.form_id == "dp-imm.logical-immediate-ands":
-        if (word & 0xFFFFFC1F) in {0x72001C1F, 0x72003C1F}:
-            return False
-    if form.form_id == "load-store.single-immediate-unscaled":
-        return ((word >> 10) & 0x3) != 0x2
-    if form.form_id == "load-store.pair":
-        return ((word >> 23) & 0x3) != 0
-    if form.form_id in {"dp-reg.addsub-shifted.w", "dp-reg.addsub-shifted.x"}:
-        if ((word >> 22) & 0x3) == 0x3:
-            return False
-        if form.form_id.endswith(".w") and ((word >> 15) & 1):
-            return False
-    if form.form_id in {"dp-reg.addsub-extended.w", "dp-reg.addsub-extended.x"}:
-        if ((word >> 10) & 0x7) > 4:
-            return False
-    if form.constructor == "SimdShift":
-        immediate = (word >> 16) & 0x7F
-        if form.architectural_status == "implemented":
-            return immediate >= 32
-        if form.form_id.endswith("-16"):
-            return 16 <= immediate < 32
-        if form.form_id.endswith("-8"):
-            return 8 <= immediate < 16
-    if form.constructor == "Crc32":
-        return bool((word >> 31) & 1) == (((word >> 10) & 3) == 3)
-    return True
+    if any((word & mask) == (opcode & mask)
+           for mask, opcode in form.excluded_partitions):
+        return False
+    return all(
+        ((word >> lsb) & ((1 << width) - 1)) in allowed
+        for lsb, width, allowed in form.field_constraints
+    )
 
 
 def _case_has_form(text: str, form: Form) -> bool:
@@ -602,10 +609,10 @@ def _encoding_wins(form: Form, word: int) -> bool:
     """Credit an encoding to the most specific inventory partition."""
     if not _encoding_matches(form, word):
         return False
-    specificity = form.mask.bit_count()
+    specificity = form.mask.bit_count() + sum(width for _, width, _ in form.field_constraints)
     return not any(
         other is not form and _encoding_matches(other, word)
-        and other.mask.bit_count() > specificity
+        and other.mask.bit_count() + sum(width for _, width, _ in other.field_constraints) > specificity
         for other in INVENTORY
     )
 
@@ -646,7 +653,11 @@ def _universal_theorems(root: Path, form: Form, decode: bool, hol_execution_prob
             "write_arith_sp_result",
             "write_arith_unflagged_nzcv",
         ):
-            if re.search(rf"Theorem\s+{theorem}\s*:", coverage_script):
+            block = _theorem_block(coverage_script, theorem)
+            if block and (
+                theorem == "add_execute_with_forms"
+                or re.search(r"\.(?:nzcv|regs|sp)\s*=", block)
+            ):
                 sources.append(f"arm64CoverageTheory.{theorem}")
     # AES word/state cancellation laws are shared representation lemmas.  They
     # are reported by the crypto theory but do not establish any AES opcode's
@@ -670,40 +681,7 @@ def _classify_branch_evidence(classify: str, form: Form, source_mask: int, sourc
     return False
 
 
-def _source_rejects_probe(classify: str, form: Form, word: int) -> bool:
-    """Recognize an explicit width guard in the affected classifier clause."""
-    if form.constructor not in ADD_CONSTRUCTORS:
-        return False
-    expected = "T" if word & (1 << 31) else "F"
-    for segment in re.split(r"\belse if\b", classify):
-        if not _contains_word(segment, form.constructor):
-            continue
-        if re.search(rf"word_bit\s+31\s+w\s*=\s*{expected}\s+then\s+NONE", segment):
-            return True
-        if expected == "F" and re.search(r"¬\s*word_bit\s+31\s+w\s+then\s+NONE", segment):
-            return True
-        if expected == "T" and re.search(r"word_bit\s+31\s+w\s+then\s+NONE", segment):
-            return True
-        if expected == "F" and re.search(r"¬\s*sf\s+then\s+NONE", segment):
-            return True
-        if expected == "T" and re.search(r"\bsf\s+then\s+NONE", segment):
-            return True
-        if expected == "F" and re.search(r"\bsf\s*=\s*F\s+then\s+NONE", segment):
-            return True
-        if expected == "T" and re.search(r"\bsf\s*=\s*T\s+then\s+NONE", segment):
-            return True
-        if expected == "F" and re.search(r"if\s+sf\s+then\s+SOME\b.*?else\s+NONE", segment, re.S):
-            return True
-        if expected == "T" and re.search(r"if\s+sf\s+then\s+NONE\b.*?else\s+SOME", segment, re.S):
-            return True
-        if expected == "F" and re.search(r"if\s+word_bit\s+31\s+w\s+then\s+SOME\b.*?else\s+NONE", segment, re.S):
-            return True
-        if expected == "T" and re.search(r"if\s+word_bit\s+31\s+w\s+then\s+NONE\b.*?else\s+SOME", segment, re.S):
-            return True
-    return False
-
-
-def _evidence(root: Path, form: Form, isa: str, hidden: set[str]) -> dict[str, object]:
+def _evidence(root: Path, form: Form, isa: str, hidden: set[str], contract_root: Path | None = None) -> dict[str, object]:
     encode = _block(isa, "Definition encode_def:")
     classify = _block(isa, "Definition classify_def:") + _block(isa, "Definition classify_simd_def:")
     execute = _block(isa, "Definition execute_with_def:")
@@ -722,14 +700,12 @@ def _evidence(root: Path, form: Form, isa: str, hidden: set[str]) -> dict[str, o
     hol_probe = bool(constructor and _hol_probe(form, coverage_script))
     hol_negative_probe = _hol_negative_probe(form, coverage_script)
     branch_evidence = _classify_branch_evidence(classify, form, source_mask, source_opcode)
-    rejected_probes = [word for word in probes if _source_rejects_probe(classify, form, word)]
     decode = bool(
         constructor
         and _contains_word(encode, constructor)
         and (branch_evidence or hol_probe)
         and probe_shape_ok
         and source_fields_ok
-        and not rejected_probes
         and hol_probe
     )
     execution, faults_modeled, execution_clause, state_update_modeled = _execution_support(isa, execute, form)
@@ -776,7 +752,7 @@ def _evidence(root: Path, form: Form, isa: str, hidden: set[str]) -> dict[str, o
         for index, case in native_cases.items()
     )
     universal_sources = _universal_theorems(root, form, decode, hol_execution_probe)
-    contract_witnesses = _contract_witnesses(root, form) if decode else []
+    contract_witnesses = _contract_witnesses(contract_root or root, form) if decode else []
     definition_sources: list[str] = []
     if decode:
         definition_sources.append("arm64IsaTheory.encode_of_decode")
@@ -814,16 +790,19 @@ def _evidence(root: Path, form: Form, isa: str, hidden: set[str]) -> dict[str, o
         "feature": form.feature,
     }
 
-def coverage(root: Path, hidden: set[str] | None = None) -> dict[str, object]:
+def coverage(root: Path, hidden: set[str] | None = None, contract_root: Path | None = None) -> dict[str, object]:
     isa = _source(root, "isa/arm64IsaScript.sml")
     hidden_set = hidden or set()
     constructors = _constructors(isa)
     rows: list[dict[str, object]] = []
     for form in INVENTORY:
-        evidence = _evidence(root, form, isa, hidden_set)
+        evidence = _evidence(root, form, isa, hidden_set, contract_root)
+        faults_complete = not evidence["execution_faults"] or (
+            evidence["faults_modeled"] and evidence["fault_test_evidence"]
+        )
         if form.architectural_status == "partially_implemented" and evidence["decode"] and evidence["execution"]:
             status = "partially_implemented"
-        elif evidence["decode"] and evidence["execution"]:
+        elif evidence["decode"] and evidence["execution"] and faults_complete:
             status = "implemented"
         elif evidence["decode"] or evidence["execution"]:
             status = "partially_implemented"
@@ -836,6 +815,14 @@ def coverage(root: Path, hidden: set[str] | None = None) -> dict[str, object]:
             "encoding_partitions": [
                 {"mask": f"0x{mask:08x}", "opcode": f"0x{opcode:08x}"}
                 for mask, opcode in _encoding_partitions(form)
+            ],
+            "field_constraints": [
+                {"lsb": lsb, "width": width, "allowed_values": list(allowed)}
+                for lsb, width, allowed in form.field_constraints
+            ],
+            "excluded_partitions": [
+                {"mask": f"0x{mask:08x}", "opcode": f"0x{opcode:08x}"}
+                for mask, opcode in form.excluded_partitions
             ],
             "variants": list(form.variants),
             "evidence": evidence,
@@ -876,15 +863,12 @@ def _coverage_with_marker(root: Path, form_id: str) -> dict[str, object]:
     with tempfile.TemporaryDirectory(prefix="a64-coverage-") as directory:
         patched = Path(directory)
         for relative in source_files:
+            if relative.startswith("examples/"):
+                continue
             destination = patched / relative
             source = root / relative
             if not source.exists():
                 continue
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, destination)
-        for source in (root / "examples").glob("*/*Script.sml"):
-            relative = source.relative_to(root)
-            destination = patched / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, destination)
         isa_path = patched / "isa/arm64IsaScript.sml"
@@ -899,7 +883,7 @@ def _coverage_with_marker(root: Path, form_id: str) -> dict[str, object]:
         if branch not in isa_text:
             raise AssertionError(f"could not find classifier branch for {form_id}")
         isa_path.write_text(isa_text.replace(branch, branch + guard, 1), encoding="utf-8")
-        return coverage(patched)
+        return coverage(patched, hidden={form_id}, contract_root=root)
 
 
 _HOL_ACCEPTANCE_CACHE: dict[tuple[str, str], tuple[bool, str]] = {}
@@ -1032,11 +1016,25 @@ def validate(root: Path, report: dict[str, object]) -> list[str]:
             errors.append(f"implemented row has no HOL constructor: {row['form_id']}")
         if row["architectural_status"] == "valid_but_unimplemented" and row["constructor"] is None:
             errors.append(f"unimplemented row has no source name: {row['form_id']}")
-        if row["architectural_status"] == "implemented" and row["status"] != "implemented":
+        if row["architectural_status"] == "implemented" and row["status"] == "unimplemented":
             errors.append(f"implemented row lost coverage: {row['form_id']} ({row['status']})")
         if row["architectural_status"] == "partially_implemented" and row["status"] == "unimplemented":
             errors.append(f"partially implemented row lost all coverage: {row['form_id']}")
         evidence = row["evidence"]
+        partitions = [
+            (int(part["mask"], 16), int(part["opcode"], 16))
+            for part in row["encoding_partitions"]
+        ]
+        if not partitions:
+            errors.append(f"row has no encoding partition: {row['form_id']}")
+        for constraint in row["field_constraints"]:
+            if not constraint["allowed_values"]:
+                errors.append(f"empty field constraint: {row['form_id']}")
+        for word_text in evidence["decode_probes"]:
+            word = int(word_text, 16)
+            memberships = sum((word & mask) == (opcode & mask) for mask, opcode in partitions)
+            if memberships != 1:
+                errors.append(f"probe has {memberships} encoding partitions: {row['form_id']} {word_text}")
         for key in ("decode", "encode_round_trip", "decode_probes", "hol_decode_probe", "hol_decode_negative_probe", "execution", "execution_clause", "hol_execution_probe", "execution_evidence_level", "state_update_modeled", "execution_faults", "faults_modeled", "fault_test_evidence", "step_faults", "native", "l3_arm8", "l3_discrepancy", "l3_discrepancy_sources", "universal", "universal_sources", "universal_contract_sources", "definition_sources", "verified_c_contract", "hidden_for_acceptance"):
             if key not in evidence:
                 errors.append(f"missing evidence field {key}: {row['form_id']}")
