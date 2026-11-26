@@ -61,6 +61,23 @@ Definition aes_to_vector_def:
       ((c3 @@ c2) : word64) @@ ((c1 @@ c0) : word64)
 End
 
+(* The two conversions are inverse at the HOL word/state boundary.  Keep the
+   cancellation laws in the ISA theory so clients do not repeat the bit-vector
+   proof in each crypto contract. *)
+Theorem aes_word_to_state[simp]:
+  ∀s. vector_to_aes (aes_to_vector s) = s
+Proof
+  simp[FORALL_BLOCK, vector_to_aes_def, aes_to_vector_def, from_state_def,
+       to_state_def, aes_pack_column_def] >> BBLAST_TAC
+QED
+
+Theorem aes_state_to_word[simp]:
+  ∀x. aes_to_vector (vector_to_aes x) = x
+Proof
+  simp[vector_to_aes_def, aes_to_vector_def, to_state_Inversion,
+       aes_pack_column_def] >> BBLAST_TAC
+QED
+
 (* AESE and AESD XOR their operands before the FIPS 197 round transforms.
    The MixColumns forms use only the source register. *)
 Definition aes_value_def:

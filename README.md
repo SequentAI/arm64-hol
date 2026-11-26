@@ -56,3 +56,21 @@ python3 tests/generate_native.py --check
 ```
 
 Released under the [BSD 3-Clause License](LICENSE).
+
+## Fixture-independent A64 EL0 coverage
+
+`tools/a64_coverage.py` contains the versioned `a64-el0-v1.1-armv9.4`
+inventory. It covers data-processing immediate/register, branches and EL0
+system, loads/stores, and AdvSIMD/crypto forms. Each row records explicit
+masks, opcodes or encoding partitions, decode/encode and execution evidence,
+and native, L3, universal, and optional C-contract evidence separately. The
+127-form denominator does not depend on generated compiler bytes.
+
+```sh
+python3 tools/a64_coverage.py --check --accept-add
+PYTHONPATH=tools python3 -m unittest discover -s tools -p 'test_*.py'
+```
+
+The acceptance check hides one implemented ADD width and verifies that exactly
+that row becomes missing while the denominator stays fixed. Valid unimplemented
+forms remain explicit in the report. Generated C scripts are optional evidence.

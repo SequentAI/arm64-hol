@@ -30,7 +30,12 @@ jobs:
           holbuild buildhol
           holbuild -j"$(nproc)" build --skip-proof-steps arm64HolTheory
           holbuild check arm64CryptoTheory arm64IsaTheory arm64IsaCvTheory \
-            arm64NativeCasesTheory arm64NativeTheory arm64L3Theory arm64HolTheory
+            arm64NativeCasesTheory arm64NativeTheory arm64L3Theory arm64CoverageTheory arm64HolTheory
+
+      - name: Check fixture-independent A64 EL0 coverage
+        run: |
+          python3 tools/a64_coverage.py --check --accept-add
+          PYTHONPATH=tools python3 -m unittest discover -s tools -p 'test_*.py'
 
   native:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
