@@ -1,0 +1,12 @@
+[project]
+name = "holexamples"
+version = "0.1.0"
+
+[build]
+members = [
+  "examples/Crypto/AES",
+  "examples/machine-code/hoare-triple",
+  "examples/l3-machine-code/common",
+  "examples/l3-machine-code/arm8/model/arm8Script.sml",
+  "examples/l3-machine-code/arm8/step/arm8_stepScript.sml",
+]

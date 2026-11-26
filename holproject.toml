@@ -1,0 +1,19 @@
+[holbuild]
+minimum_version = "0.14.86"
+
+[project]
+name = "arm64-isa"
+version = "0.1.0"
+
+[build]
+members = [".", "isa", "tests"]
+roots = ["arm64IsaHolScript.sml"]
+
+[dependencies.hol]
+git = "https://github.com/HOL-Theorem-Prover/HOL.git"
+rev = "b818ed18c69ae82e18faecb4bd8a8c8f31f9ce14"
+
+[dependencies.holexamples]
+from = "hol"
+path = "."
+manifest = "holexamples.manifest.toml"
