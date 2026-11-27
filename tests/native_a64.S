@@ -71,6 +71,18 @@ ins_\name:
     next
 .endm
 
+// Literal probes address the pool 48 bytes before and 12 bytes after them.
+.macro literal_probe name, instruction
+    start \name
+    b 1f
+8:  literal_pool
+1:
+    word_label \name
+    \instruction
+    next
+9:  literal_pool
+.endm
+
 .macro stack_probe name, instruction
     start \name
     mov sp, x15
@@ -121,6 +133,16 @@ word_label ret
 start br
 word_label br
     br x1
+    next
+    mov x12, #12
+    b .Lfinish
+    mov x12, #20
+    b .Lfinish
+
+start blr
+    adr x17, ins_blr
+word_label blr
+    blr x1
     next
     mov x12, #12
     b .Lfinish

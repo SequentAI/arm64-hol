@@ -1,0 +1,925 @@
+#!/usr/bin/env python3
+"""Measure arm64-hol's A64 decoder against Arm's Armv9.4-A Sail decoder.
+
+The inventory is every A64 encoding clause (`__DecodeA64_*`) in
+`arm-v9.4-a/src/instrs64{,_sve,_sme}.sail` of rems-project/sail-arm. Each clause is
+sampled: its fixed bits are kept and its operand bits filled with seeded
+random values. A small interpreter for the subset of Sail that the
+`decode_*` functions use classifies each sample as Sail decodes it:
+
+  valid       the decoder reaches an `execute_*` call (or ends as a NOP)
+              and the checks at the start of that function pass at EL0
+  undefined   the decoder, or those checks, throw `Error_Undefined`
+  unpredictable  they reach `ConstrainUnpredictable`
+  unknown     the result depends on a value the interpreter does not model,
+              such as the per-register EL0 access rules of system registers
+
+The checks at the start of an `execute_*` function run up to the first
+statement the interpreter cannot evaluate, with `PSTATE.EL` = EL0. A call
+there to a helper elsewhere in the model (`v8_base.sail`) that can throw
+`Error_Undefined` makes the sample unknown, except checks that depend on
+how higher exception levels configure EL0 (FP, AdvSIMD, SVE, MOPS and
+pointer-authentication enables), which count as passing like the features.
+Every optional feature (`Have*()`) counts as implemented; each clause
+lists the feature predicates its decoder consults. The same words are
+decoded by `decode armv9_4` in HOL4 (`cv_eval`, through `holbuild run`).
+A clause is covered when HOL4 decodes all its valid samples, and
+unsampled when no sample is valid. Any sample HOL4 decodes but Sail
+rejects is listed as a mismatch.
+
+Usage: a64_coverage.py [--sail DIR] [--samples N] [--json FILE]
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import random
+import re
+import subprocess
+import sys
+import tempfile
+import urllib.request
+from collections import Counter, defaultdict
+from dataclasses import dataclass, field
+from pathlib import Path
+
+SAIL_COMMIT = "329d5009fe33afcf6fa2cda0e52c1c1ed3d8a1d8"
+SAIL_URL = ("https://raw.githubusercontent.com/rems-project/sail-arm/"
+            f"{SAIL_COMMIT}/arm-v9.4-a/src/")
+SAIL_FILES = ("instrs64.sail", "instrs64_sve.sail", "instrs64_sme.sail", "v8_base.sail")
+
+# Helpers whose UNDEFINED outcome depends on how higher exception levels
+# configure EL0 (CPACR_EL1, SCTLR_EL1, SCR_EL3 and the like) rather than on
+# the exception level itself; they count as passing, like the features.
+ASSUMED_ENABLED = {"CheckFPEnabled64", "CheckFPAdvSIMDEnabled64", "AArch64_CheckFPEnabled",
+                   "AArch64_CheckFPAdvSIMDEnabled", "CheckSVEEnabled",
+                   "CheckNonStreamingSVEEnabled", "CheckOriginalSVEEnabled",
+                   "CheckMOPSEnabled", "AddPACDA", "AddPACDB", "AddPACGA", "AddPACIA",
+                   "AddPACIB", "AuthDA", "AuthDB", "AuthIA", "AuthIB"}
+
+# Instruction classes (the `aarch64_instrs_<class>` suffix of each decode
+# function) grouped into the profile areas the report is split by. The
+# first matching prefix wins; anything else is reported as "other".
+AREAS = [
+    ("privileged", (
+        "branch_unconditional_eret", "system_exceptions_debug_exception",
+        "system_exceptions_runtime_hvc", "system_exceptions_runtime_smc",
+        "system_exceptions_debug_halt", "system_register_system_128",
+        "system_sysops_128", "system_sysinstwithreg")),
+    ("extensions", (
+        "integer_tags", "integer_pac", "memory_single_general_immediate_signed_pac",
+        "memory_mcpymset", "system_tme", "memory_atomicops_ld_acc",
+        "memory_atomicops_st_acc", "memory_rcw", "memory_gcs",
+        "memory_atomicops_ld_128", "memory_atomicops_swp_128",
+        "memory_ordered_pair", "integer_arithmetic_max_min",
+        "integer_arithmetic_unary_abs", "integer_arithmetic_unary_cnt",
+        "integer_arithmetic_unary_ctz", "integer_arithmetic_pointer",
+        "integer_flags", "memory_single_general_range")),
+    ("atomics and ordered", (
+        "memory_atomicops", "memory_exclusive", "memory_ordered",
+        "memory_single_general_immediate_signed_offset_lda_stl",
+        "memory_single_simdfp_immediate_signed_offset_ordered",
+        "memory_vector_single_no_wb_ordered")),
+    ("system", ("system_", "branch_conditional_hinted")),
+    ("integer", ("integer_", "branch_")),
+    ("load/store", ("memory_single_general", "memory_pair_general",
+                    "memory_literal_general")),
+    ("SIMD&FP load/store", ("memory_single_simdfp", "memory_pair_simdfp",
+                            "memory_literal_simdfp", "memory_vector")),
+    ("floating point", ("float_",)),
+    ("AdvSIMD", ("vector_",)),
+    ("reserved", ("udf_",)),
+]
+
+
+def area_of(instr_class: str) -> str:
+    for area, prefixes in AREAS:
+        if instr_class.startswith(prefixes):
+            return area
+    return "other"
+
+
+# ---------------------------------------------------------------------------
+# Sail subset: tokens, parser and interpreter.
+
+TOKEN = re.compile(r"""
+    (?P<ws>\s+|/\*.*?\*/|//[^\n]*)
+  | (?P<num>0b[01_]+|0x[0-9A-Fa-f_]+|\d+)
+  | (?P<str>"[^"]*")
+  | (?P<id>'?[A-Za-z_][A-Za-z0-9_]*)
+  | (?P<op>\.\.|==|!=|<=|>=|<<|>>|=>|[-+*@&|<>=(){}\[\],;:.!])
+  | (?P<other>.)
+""", re.X | re.S)
+
+
+def tokenize(text: str) -> list[str]:
+    tokens, pos = [], 0
+    while pos < len(text):
+        m = TOKEN.match(text, pos)
+        if not m:
+            raise SyntaxError(f"bad character {text[pos]!r}")
+        pos = m.end()
+        if m.lastgroup != "ws":
+            tokens.append(m.group())
+    return tokens
+
+
+class Valid(Exception):
+    pass
+
+
+class Undefined(Exception):
+    pass
+
+
+class See(Exception):
+    pass
+
+
+class Unpredictable(Exception):
+    pass
+
+
+class Unknown(Exception):
+    pass
+
+
+class Unmodelled(Exception):
+    """EL0 legality depends on state the interpreter does not model."""
+
+
+# Their EL0 access rules live in the per-register accessors.
+UNMODELLED = {"AArch64_SysRegRead", "AArch64_SysRegWrite", "AArch64_SysRegRead128",
+              "AArch64_SysRegWrite128", "AArch64_SysInstr", "AArch64_SysInstr128",
+              "AArch64_SysInstrWithResult"}
+
+
+@dataclass(frozen=True)
+class Bits:
+    value: int
+    width: int
+
+    def __post_init__(self):
+        object.__setattr__(self, "value", self.value & ((1 << self.width) - 1))
+
+
+class Opaque:
+    """A value the interpreter does not model."""
+
+
+OPAQUE = Opaque()
+
+
+def bits_literal(text: str) -> Bits:
+    digits = text[2:].replace("_", "")
+    if text.startswith("0b"):
+        return Bits(int(digits, 2), len(digits))
+    return Bits(int(digits, 16), 4 * len(digits))
+
+
+class Parser:
+    def __init__(self, tokens: list[str]):
+        self.toks, self.i = tokens, 0
+
+    def peek(self, k: int = 0) -> str:
+        j = self.i + k
+        return self.toks[j] if j < len(self.toks) else ""
+
+    def next(self) -> str:
+        tok = self.peek()
+        self.i += 1
+        return tok
+
+    def expect(self, tok: str) -> None:
+        if self.next() != tok:
+            raise SyntaxError(f"expected {tok!r} near {self.toks[self.i-5:self.i+5]}")
+
+    def skip_type(self, stops: set[str]) -> None:
+        depth = 0
+        while True:
+            tok = self.peek()
+            if not tok:
+                raise SyntaxError("unterminated type")
+            if depth == 0 and tok in stops:
+                return
+            if tok in "({[":
+                depth += 1
+            elif tok in ")}]":
+                depth -= 1
+            self.next()
+
+    # Statements -----------------------------------------------------------
+    def prefix(self) -> tuple:
+        """The statements of a function body up to the first it cannot parse."""
+        self.expect("{")
+        stmts = []
+        try:
+            while self.peek() != "}":
+                stmts.append(self.statement())
+                if self.peek() == ";":
+                    self.next()
+        except (SyntaxError, IndexError):
+            stmts.append(("expr", ("call", "unmodelled", [])))
+        return ("block", stmts)
+
+    def block(self) -> tuple:
+        self.expect("{")
+        stmts = []
+        while self.peek() != "}":
+            stmts.append(self.statement())
+            if self.peek() == ";":
+                self.next()
+        self.expect("}")
+        return ("block", stmts)
+
+    def pattern(self):
+        if self.peek() == "(":
+            self.next()
+            names = []
+            while True:
+                names.append(self.next())
+                if self.peek() == ":":
+                    self.next()
+                    self.skip_type({",", ")"})
+                if self.next() == ")":
+                    return ("tuple", names)
+        name = self.next()
+        if self.peek() == ":":
+            self.next()
+            self.skip_type({"="})
+        return name
+
+    def statement(self) -> tuple:
+        tok = self.peek()
+        if tok == "let":
+            self.next()
+            pat = self.pattern()
+            self.expect("=")
+            value = self.expr()
+            if self.peek() == "in":
+                self.next()
+                body = self.block() if self.peek() == "{" else self.expr()
+                return ("letin", pat, value, body)
+            return ("let", pat, value)
+        if re.match(r"[A-Za-z_]", tok) and self.peek(1) == ":":
+            name = self.next()
+            self.next()
+            self.skip_type({"="})
+            self.expect("=")
+            return ("let", name, self.expr())
+        if re.match(r"[A-Za-z_]", tok) and self.peek(1) == "=":
+            name = self.next()
+            self.next()
+            return ("let", name, self.expr())
+        if tok in ("foreach", "var", "while", "repeat"):
+            raise SyntaxError(tok)
+        return ("expr", self.expr())
+
+    # Expressions ----------------------------------------------------------
+    BINARY = [("|",), ("&",), ("==", "!=", "<", ">", "<=", ">="), ("@",),
+              ("+", "-"), ("*",), ("<<", ">>")]
+
+    def expr(self):
+        if self.peek() == "if":
+            self.next()
+            cond = self.expr()
+            self.expect("then")
+            then = self.block() if self.peek() == "{" else self.expr()
+            other = ("unit",)
+            if self.peek() == "else":
+                self.next()
+                other = self.block() if self.peek() == "{" else self.expr()
+            return ("if", cond, then, other)
+        if self.peek() == "match":
+            self.next()
+            subject = self.expr()
+            self.expect("{")
+            arms = []
+            while self.peek() != "}":
+                pat = self.next()
+                if pat == "[":
+                    items = []
+                    while self.peek() != "]":
+                        items.append(self.next())
+                        if self.peek() == ",":
+                            self.next()
+                    self.next()
+                    pat = tuple(items)
+                self.expect("=>")
+                body = self.block() if self.peek() == "{" else self.expr()
+                arms.append((pat, body))
+                if self.peek() == ",":
+                    self.next()
+            self.expect("}")
+            return ("match", subject, arms)
+        return self.binary(0)
+
+    def binary(self, level: int):
+        if level == len(self.BINARY):
+            return self.postfix()
+        left = self.binary(level + 1)
+        while self.peek() in self.BINARY[level]:
+            op = self.next()
+            left = ("bin", op, left, self.binary(level + 1))
+        return left
+
+    def postfix(self):
+        node = self.primary()
+        while True:
+            if self.peek() == "[":
+                self.next()
+                hi = self.expr()
+                if self.peek() == "..":
+                    self.next()
+                    lo = self.expr()
+                    self.expect("]")
+                    node = ("slice", node, hi, lo)
+                else:
+                    self.expect("]")
+                    node = ("index", node, hi)
+            elif self.peek() == ".":
+                self.next()
+                node = ("field", node, self.next())
+            elif self.peek() == ":" and self.peek(1) == "bool":
+                self.i += 2
+            else:
+                return node
+
+    def primary(self):
+        tok = self.next()
+        if tok == "(":
+            if self.peek() == ")":
+                self.next()
+                return ("unit",)
+            items = [self.expr()]
+            if self.peek() == ":":
+                self.next()
+                self.skip_type({")"})
+            while self.peek() == ",":
+                self.next()
+                items.append(self.expr())
+            self.expect(")")
+            return items[0] if len(items) == 1 else ("tuple", items)
+        if tok == "[":
+            inner = self.expr()
+            self.expect("]")
+            return ("vec1", inner)
+        if tok == "{":
+            self.i -= 1
+            return self.block()
+        if tok.startswith(("0b", "0x")):
+            return ("const", bits_literal(tok))
+        if tok.isdigit():
+            return ("const", int(tok))
+        if tok in ("true", "false"):
+            return ("const", tok == "true")
+        if tok.startswith('"'):
+            return ("const", tok[1:-1])
+        if tok == "-":
+            return ("bin", "-", ("const", 0), self.postfix())
+        if self.peek() == "(" and tok in ("assert", "constraint"):
+            depth = 0
+            while True:
+                t = self.next()
+                depth += t == "("
+                depth -= t == ")"
+                if depth == 0:
+                    return ("unit",)
+        if self.peek() == "(":
+            self.next()
+            args = []
+            while self.peek() != ")":
+                args.append(self.expr())
+                if self.peek() == ",":
+                    self.next()
+            self.next()
+            return ("call", tok, args)
+        return ("var", tok.lstrip("'"))
+
+
+def ones(n: int) -> int:
+    return (1 << n) - 1
+
+
+def highest_set_bit(b: Bits) -> int:
+    return b.value.bit_length() - 1
+
+
+def decode_bit_masks(immn: Bits, imms: Bits, immr: Bits, immediate: bool, m: int):
+    length = highest_set_bit(Bits((immn.value << 6) | (~imms.value & 63), 7))
+    if length < 1:
+        raise Undefined
+    levels = ones(length)
+    if immediate and imms.value & levels == levels:
+        raise Undefined
+    s, r = imms.value & levels, immr.value & levels
+    esize = 1 << length
+    d = (s - r) & levels
+    welem, telem = ones(s + 1), ones(d + 1)
+    welem = ((welem >> r) | (welem << (esize - r))) & ones(esize)
+    wmask = tmask = 0
+    for i in range(m // esize):
+        wmask |= welem << (i * esize)
+        tmask |= telem << (i * esize)
+    return (Bits(wmask, m), Bits(tmask, m))
+
+
+def as_int(v) -> int:
+    if isinstance(v, Opaque):
+        raise Unknown
+    return v.value if isinstance(v, Bits) else int(v)
+
+
+def builtin(name: str, args: list):
+    if name.startswith(("Have", "IsFeatureImplemented")):
+        return True
+    if name == "throw":
+        kind = args[0]
+        if kind == "See":
+            raise See
+        if kind == "Unpredictable":
+            raise Unpredictable
+        if kind == "Undefined":
+            raise Undefined
+        raise Unknown
+    if name == "Error_Undefined":
+        return "Undefined"
+    if name == "Error_See":
+        return "See"
+    if name == "Error_ConstrainedUnpredictable":
+        return "Unpredictable"
+    if name == "ConstrainUnpredictable":
+        raise Unpredictable
+    if name.startswith("execute_") or name in ("EndOfInstruction", "return"):
+        raise Valid
+    if name == "unmodelled":
+        raise Unknown
+    if name in UNMODELLED:
+        raise Unmodelled
+    if name in ("assert", "SetBTypeCompatible", "CheckMOPSEnabled",
+                "AArch64_CheckSystemAccess"):
+        return None
+    if any(isinstance(a, Opaque) for a in args):
+        return OPAQUE
+    if name == "UInt":
+        return args[0].value
+    if name == "SInt":
+        b = args[0]
+        return b.value - (1 << b.width) if b.value >> (b.width - 1) else b.value
+    if name == "not_bool":
+        return not args[0]
+    if name == "not_vec":
+        return Bits(~args[0].value, args[0].width)
+    if name == "DIV":
+        return as_int(args[0]) // as_int(args[1])
+    if name == "Slice":
+        return Bits(args[0].value >> args[1], args[2])
+    if name == "ZeroExtend":
+        return Bits(args[0].value, args[1])
+    if name == "SignExtend":
+        b, n = args
+        v = b.value - (1 << b.width) if b.value >> (b.width - 1) else b.value
+        return Bits(v, n)
+    if name == "LSL":
+        return Bits(args[0].value << args[1], args[0].width)
+    if name == "Zeros":
+        return Bits(0, args[0])
+    if name == "Ones":
+        return Bits(ones(args[0]), args[0])
+    if name == "HighestSetBit":
+        return highest_set_bit(args[0])
+    if name == "LowestSetBit":
+        v = args[0].value
+        return (v & -v).bit_length() - 1 if v else args[0].width
+    if name == "DecodeBitMasks":
+        return decode_bit_masks(*args)
+    if name in ("Halted",):
+        return False
+    if name in ("CurrentVL_read", "CurrentSVL_read"):
+        return 128  # the smallest SVE and SME vector lengths
+    return OPAQUE
+
+
+VALUE_BUILTINS = {"UInt", "SInt", "DIV", "Slice", "ZeroExtend", "SignExtend", "LSL",
+                  "Zeros", "Ones", "HighestSetBit", "LowestSetBit", "DecodeBitMasks"}
+
+
+class Interp:
+    def __init__(self, functions: dict[str, tuple[list[str], tuple]], undefined: set[str]):
+        self.functions = functions
+        self.undefined = undefined
+
+    def run(self, node, env: dict):
+        kind = node[0]
+        if kind == "block":
+            result = None
+            for stmt in node[1]:
+                result = self.run(stmt, env)
+            return result
+        if kind == "let":
+            value = self.run(node[2], env)
+            pat = node[1]
+            if isinstance(pat, tuple):
+                for name, v in zip(pat[1], value if isinstance(value, tuple) else [OPAQUE] * 9):
+                    env[name.lstrip("'")] = v
+            else:
+                env[pat.lstrip("'")] = value
+            return None
+        if kind == "letin":
+            self.run(("let", node[1], node[2]), env)
+            return self.run(node[3], env)
+        if kind == "expr":
+            return self.run(node[1], env)
+        if kind == "unit":
+            return None
+        if kind == "const":
+            return node[1]
+        if kind == "var":
+            name = node[1]
+            if name in env:
+                return env[name]
+            return name  # an enumeration constant
+        if kind == "tuple":
+            return tuple(self.run(x, env) for x in node[1])
+        if kind == "vec1":
+            v = self.run(node[1], env)
+            return v if isinstance(v, (Bits, Opaque)) else Bits(int(v), 1)
+        if kind == "index":
+            b, i = self.run(node[1], env), self.run(node[2], env)
+            if isinstance(b, Opaque) or isinstance(i, Opaque):
+                return OPAQUE
+            return Bits(b.value >> as_int(i), 1)
+        if kind == "slice":
+            b = self.run(node[1], env)
+            hi, lo = self.run(node[2], env), self.run(node[3], env)
+            if isinstance(b, Opaque):
+                return OPAQUE
+            return Bits(b.value >> as_int(lo), as_int(hi) - as_int(lo) + 1)
+        if kind == "field":
+            base = node[1]
+            if base == ("var", "PSTATE") and node[2] == "EL":
+                return "EL0"
+            return OPAQUE
+        if kind == "if":
+            cond = self.run(node[1], env)
+            if isinstance(cond, Opaque):
+                raise Unknown
+            return self.run(node[2] if cond else node[3], env)
+        if kind == "match":
+            subject = self.run(node[1], env)
+            if isinstance(subject, Opaque):
+                raise Unknown
+            for pat, body in node[2]:
+                if pat == "_" or self.matches(pat, subject):
+                    return self.run(body, env)
+            raise Unknown
+        if kind == "bin":
+            return self.binary(node[1], self.run(node[2], env), self.run(node[3], env))
+        if kind == "call":
+            name = node[1]
+            args = [self.run(a, env) for a in node[2]]
+            if name in self.functions:
+                params, body = self.functions[name]
+                if not name.startswith("execute_"):
+                    return self.run(body, dict(zip(params, args)))
+                try:
+                    self.run(body, dict(zip(params, args)))
+                except (Unknown, KeyError, TypeError, AttributeError, ValueError,
+                        IndexError, AssertionError):
+                    pass
+                raise Valid
+            if any(isinstance(a, str) for a in args) and name in VALUE_BUILTINS:
+                return OPAQUE
+            if name in self.undefined and name not in VALUE_BUILTINS:
+                raise Unmodelled
+            return builtin(name, args)
+        raise Unknown(kind)
+
+    @staticmethod
+    def matches(pat, subject) -> bool:
+        if isinstance(pat, tuple):
+            if isinstance(subject, Opaque):
+                raise Unknown
+            width = len(pat)
+            return all(b == "_" or ((subject.value >> (width - 1 - i)) & 1) == (b == "bitone")
+                       for i, b in enumerate(pat))
+        if pat.startswith(("0b", "0x")):
+            return bits_literal(pat).value == as_int(subject)
+        if pat.isdigit():
+            return int(pat) == as_int(subject)
+        return pat == subject
+
+    @staticmethod
+    def binary(op: str, a, b):
+        if op not in ("==", "!=") and (isinstance(a, str) or isinstance(b, str)):
+            return OPAQUE
+        if isinstance(a, Opaque) or isinstance(b, Opaque):
+            if op == "&" and (a is False or b is False):
+                return False
+            if op == "|" and (a is True or b is True):
+                return True
+            return OPAQUE
+        if op == "@":
+            return Bits((a.value << b.width) | b.value, a.width + b.width)
+        if op in ("&", "|") and isinstance(a, bool):
+            return (a and b) if op == "&" else (a or b)
+        if op in ("&", "|"):
+            w = a.width
+            return Bits(a.value & b.value if op == "&" else a.value | b.value, w)
+        if op in ("==", "!="):
+            if isinstance(a, Bits) or isinstance(b, Bits):
+                eq = as_int(a) == as_int(b)
+            else:
+                eq = a == b
+            return eq if op == "==" else not eq
+        if op in ("<", ">", "<=", ">="):
+            x, y = as_int(a), as_int(b)
+            return {"<": x < y, ">": x > y, "<=": x <= y, ">=": x >= y}[op]
+        if isinstance(a, Bits):
+            v = {"+": a.value + as_int(b), "-": a.value - as_int(b),
+                 "*": a.value * as_int(b), "<<": a.value << as_int(b),
+                 ">>": a.value >> as_int(b)}[op]
+            return Bits(v, a.width)
+        x, y = as_int(a), as_int(b)
+        return {"+": x + y, "-": x - y, "*": x * y, "<<": x << y, ">>": x >> y}[op]
+
+
+# ---------------------------------------------------------------------------
+# The inventory.
+
+@dataclass
+class Clause:
+    index: int
+    group: str
+    see: int
+    mask: int
+    value: int
+    exclude: tuple[int, int] | None
+    decoder: str
+    mnemonic: str
+    instr_class: str
+    area: str
+    features: list[str]
+    body: tuple = field(repr=False)
+
+
+CLAUSE = re.compile(
+    r"function clause __DecodeA64_(\w+) \(\(pc, \((.*?) as __opcode\)\) "
+    r"if (.*?)SEE < (\d+)\) = (\{.*?\n\})", re.S)
+EXCLUDE = re.compile(r"not_bool\(\(match Slice\(__opcode, (\d+), (\d+)\) \{\s*"
+                     r"\[([^\]]*)\] => true,\s*_ => false\s*\}\) : bool\) & $", re.S)
+FUNCTION = re.compile(r"\nfunction ((?:decode|execute)_\w+) \(?([^)=]*?)\)? = (\{.*?\n\})", re.S)
+FEATURE = re.compile(r"\b(Have\w+|IsFeatureImplemented\(\w+\))")
+
+
+def bit_pattern(bits: list[str], top: int) -> tuple[int, int]:
+    mask = value = 0
+    for pos, bit in zip(range(top, -1, -1), bits):
+        if bit != "_":
+            mask |= 1 << pos
+            value |= (bit == "bitone") << pos
+    return mask, value
+
+
+def load_inventory(source: str):
+    functions, texts = {}, {}
+    for name, params, body in FUNCTION.findall(source):
+        texts[name] = body
+        params = [p.strip() for p in params.split(",")]
+        try:
+            parser = Parser(tokenize(body))
+            functions[name] = (params, parser.prefix() if name.startswith("execute_")
+                               else parser.block())
+        except SyntaxError:
+            functions[name] = ([], ("block", [("expr", ("call", "unmodelled", []))]))
+    clauses = []
+    for index, (group, pattern, guard, see, body) in enumerate(CLAUSE.findall(source)):
+        if pattern.startswith("0b"):
+            mask, value = 0xFFFFFFFF, int(pattern[2:], 2)
+        else:
+            bits = [b.strip() for b in pattern.strip("[]").split(",")]
+            assert len(bits) == 32, (group, see)
+            mask, value = bit_pattern(bits, 31)
+        exclude = None
+        if guard:
+            m = EXCLUDE.fullmatch(guard)
+            assert m, guard
+            lo, width = int(m.group(1)), int(m.group(2))
+            emask, evalue = bit_pattern([b.strip() for b in m.group(3).split(",")], width - 1)
+            exclude = (emask << lo, evalue << lo)
+        decoder = re.findall(r"(decode_\w+)\(", body)[-1]
+        mnemonic, _, instr_class = decoder[len("decode_"):].partition("_aarch64_instrs_")
+        area = group if group in ("SVE", "SME") else area_of(instr_class)
+        ast = Parser(tokenize(body)).block()
+        features = sorted(set(FEATURE.findall(guard + body + texts.get(decoder, ""))))
+        clauses.append(Clause(index, group, int(see), mask, value, exclude, decoder,
+                              mnemonic, instr_class, area, features, ast))
+    return clauses, functions
+
+
+HELPER = re.compile(r"\nfunction (\w+)[^\n]*?= (\{.*?\n\})", re.S)
+CALL = re.compile(r"\b([A-Za-z_]\w*)\(")
+
+
+def undefined_helpers(source: str) -> set[str]:
+    """Functions outside decode_*/execute_* that can throw Error_Undefined."""
+    bodies = defaultdict(str)
+    for name, body in HELPER.findall(source):
+        if not name.startswith(("decode_", "execute_")):
+            bodies[name] += body
+    calls = {name: set(CALL.findall(body)) for name, body in bodies.items()}
+    undefined = {name for name, body in bodies.items() if "Error_Undefined" in body}
+    while True:
+        more = {name for name, called in calls.items() if called & undefined} - undefined
+        if not more:
+            return undefined - ASSUMED_ENABLED
+        undefined |= more
+
+
+def top_group(word: int) -> str:
+    op0 = (word >> 25) & 0xF
+    if op0 == 0:
+        return "SME" if word >> 31 else "Reserved"
+    if op0 in (1, 3):
+        return "Unallocated"
+    if op0 == 2:
+        return "SVE"
+    if (op0 & 0b1110) == 0b1000:
+        return "DataProcImm"
+    if (op0 & 0b1110) == 0b1010:
+        return "BranchExcSys"
+    if (op0 & 0b0101) == 0b0100:
+        return "LoadStore"
+    if (op0 & 0b0111) == 0b0101:
+        return "DataProcReg"
+    return "DataProcFPSIMD"
+
+
+def sail_decode(word: int, clauses: list[Clause], by_group, interp: Interp):
+    """Return (status, clause) for a word, as Sail's decoder would."""
+    see = 0
+    for clause in by_group.get(top_group(word), ()):
+        if clause.see <= see or word & clause.mask != clause.value:
+            continue
+        if clause.exclude and word & clause.exclude[0] == clause.exclude[1]:
+            continue
+        env = {"__opcode": Bits(word, 32), "SEE": see}
+        try:
+            interp.run(clause.body, env)
+            return "unknown", clause
+        except Valid:
+            return "valid", clause
+        except Undefined:
+            return "undefined", clause
+        except Unpredictable:
+            return "unpredictable", clause
+        except See:
+            see = clause.see
+        except (Unknown, Unmodelled, KeyError, TypeError, AttributeError, ValueError,
+                IndexError, AssertionError):
+            return "unknown", clause
+    return "undefined", None
+
+
+def samples(clause: Clause, count: int, rng: random.Random) -> list[int]:
+    free = ~clause.mask & 0xFFFFFFFF
+    words = {clause.value, clause.value | free}
+    while len(words) < count + 2 and len(words) < (1 << bin(free).count("1")):
+        words.add(clause.value | (rng.getrandbits(32) & free))
+    return sorted(words)
+
+
+# ---------------------------------------------------------------------------
+# HOL4 side.
+
+HOL_SCRIPT = r"""
+load "wordsLib";
+load "cv_transLib";
+load "arm64IsaCvTheory";
+open HolKernel boolLib bossLib wordsLib arm64IsaTheory arm64IsaCvTheory cv_transLib;
+val _ = new_theory "a64_coverage";
+Definition a64_decodes_def:
+  a64_decodes [] = [] ∧
+  a64_decodes ((w:word32)::ws) = IS_SOME (decode armv9_4 w) :: a64_decodes ws
+End
+val _ = cv_trans armv9_4_def;
+val _ = cv_trans a64_decodes_def;
+val words = map (fn s => wordsSyntax.mk_wordii (valOf (Int.fromString s), 32))
+  (String.tokens Char.isSpace (TextIO.inputAll (TextIO.openIn "WORDS")));
+val out = TextIO.openOut "RESULT";
+fun chunks [] = ()
+  | chunks ws =
+      let val (now, later) = (List.take (ws, 256), List.drop (ws, 256))
+            handle Subscript => (ws, [])
+          val result = cv_eval ``a64_decodes ^(listSyntax.mk_list (now, ``:word32``))``
+      in app (fn t => TextIO.output (out, if Teq t then "1\n" else "0\n"))
+           (fst (listSyntax.dest_list (rhs (concl result))));
+         chunks later
+      end;
+val _ = chunks words;
+val _ = TextIO.closeOut out;
+"""
+
+
+def hol_decodes(words: list[int], repo: Path) -> list[bool]:
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        (tmp / "words").write_text("\n".join(map(str, words)) + "\n")
+        script = (HOL_SCRIPT.replace("WORDS", str(tmp / "words"))
+                  .replace("RESULT", str(tmp / "result")))
+        (tmp / "decodes.sml").write_text(script)
+        run = subprocess.run(["holbuild", "run", str(tmp / "decodes.sml")], cwd=repo,
+                             stdin=subprocess.DEVNULL, capture_output=True, text=True)
+        if run.returncode != 0:
+            raise SystemExit("holbuild run failed:\n" + (run.stdout + run.stderr)[-3000:])
+        result = (tmp / "result").read_text().split()
+    if len(result) != len(words):
+        raise SystemExit("HOL4 returned the wrong number of results")
+    return [r == "1" for r in result]
+
+
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    parser.add_argument("--sail", type=Path,
+                        help="arm-v9.4-a/src directory (default: fetch the pinned files)")
+    parser.add_argument("--samples", type=int, default=64, help="random words per clause")
+    parser.add_argument("--json", type=Path, help="write the per-clause report here")
+    args = parser.parse_args()
+
+    texts = []
+    for name in SAIL_FILES:
+        if args.sail:
+            texts.append((args.sail / name).read_text())
+        else:
+            with urllib.request.urlopen(SAIL_URL + name) as response:
+                texts.append(response.read().decode())
+    source = "\n".join(texts)
+    digest = hashlib.sha256(source.encode()).hexdigest()
+    clauses, functions = load_inventory(source)
+    by_group = defaultdict(list)
+    for clause in clauses:
+        by_group[clause.group].append(clause)
+    interp = Interp(functions, undefined_helpers(source))
+
+    rng = random.Random(0)
+    rows = []
+    for clause in clauses:
+        for word in samples(clause, args.samples, rng):
+            status, owner = sail_decode(word, clauses, by_group, interp)
+            rows.append((word, clause, status, owner))
+    repo = Path(__file__).resolve().parent.parent
+    decoded = hol_decodes([w for w, *_ in rows], repo)
+
+    per_clause = defaultdict(Counter)
+    mismatches = []
+    for (word, sampled, status, owner), hol in zip(rows, decoded):
+        clause = owner or sampled
+        per_clause[clause.index][(status, hol)] += 1
+        if hol and status in ("undefined", "unpredictable"):
+            mismatches.append((word, clause, status))
+
+    report = []
+    for clause in clauses:
+        counts = per_clause[clause.index]
+        valid = counts[("valid", True)] + counts[("valid", False)]
+        hit = counts[("valid", True)]
+        state = ("unsampled" if valid == 0 else "covered" if hit == valid
+                 else "partial" if hit else "missing")
+        report.append({"clause": clause.index, "group": clause.group,
+                       "mnemonic": clause.mnemonic, "class": clause.instr_class,
+                       "decoder": clause.decoder, "area": clause.area,
+                       "mask": f"{clause.mask:08x}", "value": f"{clause.value:08x}",
+                       "exclude": clause.exclude and [f"{x:08x}" for x in clause.exclude],
+                       "features": clause.features, "state": state,
+                       "valid": valid, "decoded": hit,
+                       "unknown": counts[("unknown", True)] + counts[("unknown", False)]})
+
+    totals = defaultdict(Counter)
+    for row in report:
+        totals[row["area"]][row["state"]] += 1
+    origin = f"{args.sail} (sha256 {digest[:12]})" if args.sail else f"@ {SAIL_COMMIT[:12]}"
+    print(f"Sail arm-v9.4-a {origin}: {len(clauses)} A64 clauses, "
+          f"{len(rows)} sampled words")
+    states = ("covered", "partial", "missing", "unsampled")
+    print(f"{'area':22} {'clauses':>7}" + "".join(f" {s:>9}" for s in states))
+    for area, _ in AREAS + [("SVE", ()), ("SME", ()), ("other", ())]:
+        t = totals.get(area)
+        if t:
+            print(f"{area:22} {sum(t.values()):7}" + "".join(f" {t[s]:9}" for s in states))
+    unknown = sum(r["unknown"] for r in report)
+    print(f"samples Sail's decoder could not be evaluated on: {unknown}")
+    print(f"words HOL4 decodes that Sail does not accept: {len(mismatches)}")
+    for word, clause, status in mismatches[:20]:
+        print(f"  {word:08x} {clause.mnemonic} ({clause.instr_class}): {status}")
+    if args.json:
+        args.json.write_text(json.dumps({"sail_commit": None if args.sail else SAIL_COMMIT,
+                                         "sail_sha256": digest, "clauses": report,
+                                         "mismatches": [f"{w:08x}" for w, *_ in mismatches]},
+                                        indent=1) + "\n")
+
+
+if __name__ == "__main__":
+    main()

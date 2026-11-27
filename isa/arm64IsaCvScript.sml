@@ -165,12 +165,13 @@ Triviality abstract_execute:
     abstract_result (execute_with finite_storage i s)
 Proof
   Cases_on `i` >>
-  simp[execute_with_def, execute_mem_def, execute_pair_def, execute_ldr_q_def, finish_mem_def,
+  simp[execute_with_def, execute_mem_def, execute_pair_def, put_loaded_def,
+       stored_value_def, finish_mem_def, logical_flags_def,
        write_arith_def, pairTheory.UNCURRY, abstract_reads, abstract_storage, abstract_gpr,
        abstract_base, abstract_pc, abstract_access_ok, abstract_read_bytes,
        abstract_write_bytes, GSYM abstract_updates] >>
   TRY (Cases_on `m`) >>
-  rw[execute_mem_def, execute_ldr_q_def, finish_mem_def, abstract_storage, abstract_result_def, abstract_gpr,
+  rw[execute_mem_def, put_loaded_def, stored_value_def, finish_mem_def, abstract_storage, abstract_result_def, abstract_gpr,
      abstract_base, abstract_pc, abstract_access_ok, abstract_read_bytes,
      abstract_write_bytes, abstract_reads, GSYM abstract_updates]
 QED
@@ -267,25 +268,29 @@ Definition cv_finish_mem_def:
   cv_finish_mem mode n base offset s = finish_mem finite_storage mode n base offset s
 End
 
-Definition cv_execute_mem_def:
-  cv_execute_mem load size mode t n offset s =
-    execute_mem finite_storage load size mode t n offset s
+Definition cv_put_loaded_def:
+  cv_put_loaded vec t v s = put_loaded finite_storage vec t v s
 End
 
-Definition cv_execute_ldr_q_def:
-  cv_execute_ldr_q mode t n offset s =
-    execute_ldr_q finite_storage mode t n offset s
+Definition cv_stored_value_def:
+  cv_stored_value vec t s = stored_value finite_storage vec t s
+End
+
+Definition cv_execute_mem_def:
+  cv_execute_mem vec opc size mode t n offset s =
+    execute_mem finite_storage vec opc size mode t n offset s
 End
 
 Definition cv_execute_pair_def:
-  cv_execute_pair load sf mode t u n imm s =
-    execute_pair finite_storage load sf mode t u n imm s
+  cv_execute_pair vec opc load mode t u n imm s =
+    execute_pair finite_storage vec opc load mode t u n imm s
 End
 
 val aliases = [cv_gpr_def, cv_base_reg_def, cv_set_gpr_def, cv_set_base_def,
                cv_read_bytes_eq, cv_write_bytes_eq, cv_access_ok_eq,
-               cv_fetch_def, cv_write_arith_def, cv_finish_mem_def, cv_execute_mem_def,
-               cv_execute_pair_def, cv_execute_ldr_q_def, cv_execute_def, step_cv_def];
+               cv_fetch_def, cv_write_arith_def, cv_finish_mem_def, cv_put_loaded_def,
+               cv_stored_value_def, cv_execute_mem_def, cv_execute_pair_def,
+               cv_execute_def, step_cv_def];
 
 fun specialise_clause th =
   let
@@ -369,4 +374,5 @@ val () = app (fn ty =>
   [``:32``, ``:64``];
 val () = app translate_specialised
   [gpr_def, base_reg_def, set_gpr_def, set_base_def, write_arith_def, finish_mem_def,
-   execute_mem_def, execute_pair_def, execute_ldr_q_def, execute_with_def, step_with_def];
+   put_loaded_def, stored_value_def, execute_mem_def, execute_pair_def,
+   execute_with_def, step_with_def];

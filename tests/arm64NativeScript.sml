@@ -32,10 +32,13 @@ Definition test_state_at_def:
   test_state_at vbase w (pc,sp,flags,link,regs,vectors,data) : finite_state =
     let gpr = insert 30 link (put_many 0 regs LN);
         vec = put_many vbase vectors LN;
-        mem = put_many 4096 data
-          (put_many 256 [byte_at w 0; byte_at w 1; byte_at w 2; byte_at w 3] LN);
-        perms = put_many 4096 (REPLICATE 64 (perm T T F))
-          (put_many 256 (REPLICATE 4 (perm T F T)) LN)
+        code = put_many 208 literal_pool (put_many 268 literal_pool
+          (put_many 256 [byte_at w 0; byte_at w 1; byte_at w 2; byte_at w 3] LN));
+        mem = put_many 4096 data code;
+        code_perms = put_many 208 (REPLICATE 48 (perm T F T))
+          (put_many 268 (REPLICATE 48 (perm T F T))
+            (put_many 256 (REPLICATE 4 (perm T F T)) LN));
+        perms = put_many 4096 (REPLICATE 64 (perm T T F)) code_perms
     in arm64_machine gpr sp pc (nzcv_of_bits flags) vec mem perms
 End
 
@@ -151,8 +154,8 @@ val () = check_fault "unknown_word_is_unsupported" enabled
   ``test_state 0w ^initial`` ``Unsupported``;
 val () = check_fault "ccmp_rejects_bit4" enabled
   ``test_state 0xfa498812w ^initial`` ``Unsupported``;
-val () = check_fault "andimm7_rejects_noncanonical_mask" enabled
-  ``test_state 0x92411863w ^initial`` ``Unsupported``;
+val () = check_fault "and_imm_rejects_reserved_mask" enabled
+  ``test_state 0x1200fc00w ^initial`` ``Unsupported``;
 val () = check_fault "post_index_load_rejects_base_destination_overlap" enabled
   ``test_state 0x38401442w ^initial`` ``Unsupported``;
 val () = check_fault "q_load_rejects_destination_overlap" enabled
@@ -190,8 +193,8 @@ val () = check_fault "q_post_load_checks_sp_before_access" enabled
   ``test_state 0x3cc107e0w ^initial with sp := 4097w`` ``SPAlignment``;
 val () = check_fault "q_pair_store_checks_sp_before_access" enabled
   ``test_state 0xad0003e0w ^initial with sp := 4097w`` ``SPAlignment``;
-val () = check_fault "q_pre_index_load_is_unsupported" enabled
-  ``test_state 0x3cc10c20w ^initial`` ``Unsupported``;
+val () = check_fault "simd_unprivileged_load_is_unallocated" enabled
+  ``test_state 0x3cc10820w ^initial`` ``Unsupported``;
 val () = check_fault "addv_64bit_arrangement_is_unsupported" enabled
   ``test_state 0x4ef1b800w ^initial`` ``Unsupported``;
 (* Match the RET on the read-only page used by the hardware test. *)
