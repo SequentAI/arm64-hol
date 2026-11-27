@@ -10,7 +10,9 @@ Theorem asl_fetch:
     (asl with memstate := asl_mem s.mem) =
   {(Value (fetch functional_storage s), asl with memstate := asl_mem s.mem)}
 Proof
-  strip_tac >> aslEvalLib.EXEC_TAC >> simp[]
+  strip_tac >>
+  aslEvalLib.EXEC_LHS_STEP_TAC >> aslEvalLib.EXEC_LHS_STEP_TAC >>
+  aslEvalLib.EXEC_LHS_STEP_TAC >> aslEvalLib.EXEC_LHS_STEP_TAC >> simp[]
 QED
 
 (* The specification's step up to the execution of the instruction fetched,
@@ -26,7 +28,10 @@ Theorem asl_next_fetch:
          bool_reg := asl.regstate.bool_reg⦇"__BranchTaken" ↦ F⦈;
          int_reg := asl.regstate.int_reg⦇"SEE" ↦ -1⦈|>)
 Proof
-  strip_tac >> aslEvalLib.EXEC_TAC >> aslEvalLib.EXEC_RHS_TAC
+  strip_tac >>
+  aslEvalLib.EXEC_LHS_STEP_TAC >> aslEvalLib.EXEC_LHS_STEP_TAC >>
+  aslEvalLib.EXEC_LHS_STEP_TAC >> aslEvalLib.EXEC_LHS_STEP_TAC >>
+  aslEvalLib.EXEC_LHS_STEP_TAC >> aslEvalLib.EXEC_RHS_TAC
 QED
 
 (* After the evaluation of an instruction: the definitions relating the two
@@ -36,6 +41,7 @@ val rel_simps = [
   armv9_typesTheory.PC_ref_def, armv9_typesTheory.SP_EL0_ref_def,
   armv9_typesTheory.PSTATE_ref_def, armv9_typesTheory.Z_ref_def,
   armv9_typesTheory.FeatureImpl_ref_def, armv9_typesTheory.SCTLR_EL1_ref_def,
+  armv9_typesTheory.CPACR_EL1_ref_def, armv9_typesTheory.CPTR_EL2_ref_def, armv9_typesTheory.CPTR_EL3_ref_def,
   armv9_typesTheory.TCR_EL1_ref_def, armv9_typesTheory.EDSCR_ref_def,
   armv9_typesTheory.SCR_EL3_ref_def, armv9_typesTheory.MPAM3_EL3_ref_def,
   armv9_typesTheory.MPAM2_EL2_ref_def, armv9_typesTheory.SPESampleInFlight_ref_def,
@@ -57,8 +63,38 @@ Proof
        arm64IsaTheory.reg_fields_def, arm64IsaTheory.insert_field_def,
        arm64IsaTheory.execute_with_def] >>
    qpat_x_assum `_ = fetch _ _` (assume_tac o SYM) >>
-   aslEvalLib.EXEC_AT_TAC ``seqS (ExecuteA64 _) _ _`` [] >>
+   aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >>
    CONV_TAC aslEvalLib.FIELDS_CONV >>
    irule_at (Pos hd) EQ_REFL >>
    gvs (arm64IsaTheory.write_arith_def :: arm64IsaTheory.arm_add_with_carry_def :: rel_simps))
+QED
+
+Theorem asl_sim_nop:
+  asl_sim Nop
+Proof
+  rewrite_tac[asl_sim_def] >> rpt strip_tac >>
+  drule_all asl_next_fetch >> disch_then SUBST1_TAC >>
+  gvs[arm64IsaTheory.encode_def, arm64IsaTheory.execute_with_def] >>
+  aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >>
+  irule_at (Pos hd) EQ_REFL >>
+  gvs rel_simps
+QED
+
+Theorem asl_sim_fmov_x:
+  asl_sim (SimdTransfer FmovX d n)
+Proof
+  rewrite_tac[asl_sim_def] >> rpt strip_tac >>
+  drule_all asl_next_fetch >> disch_then SUBST1_TAC >>
+  Cases_on `d = 31w` >>~-
+  ([`ExecuteA64 _`],
+   gvs[arm64IsaTheory.encode_def, arm64IsaTheory.simd_transfer_base_def,
+       arm64IsaTheory.reg_fields_def, arm64IsaTheory.insert_field_def,
+       arm64IsaTheory.execute_with_def] >>
+   qpat_x_assum `_ = fetch _ _` (assume_tac o SYM) >>
+   aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >>
+   aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >>
+   CONV_TAC aslEvalLib.FIELDS_CONV >>
+   irule_at (Pos hd) EQ_REFL >>
+   imp_res_tac state_rel_vreg64 >>
+   gvs (arm64IsaTheory.simd_extract_def :: rel_simps))
 QED

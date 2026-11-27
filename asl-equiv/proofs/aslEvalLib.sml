@@ -10,6 +10,17 @@ struct
 open HolKernel boolLib bossLib
 open armv9_p32Theory arm64AslTheory aslLemmasTheory
 
+(* Word equalities left by evaluation recur many times per instruction, so
+   their bit-blasting results, failures included, are remembered. *)
+val eq_memo = ref (Redblackmap.mkDict Term.compare : (term, thm option) Redblackmap.dict)
+fun memo_eq_conv t =
+  let val r = case Redblackmap.peek (!eq_memo, t) of
+                SOME r => r
+              | NONE =>
+                  let val r = SOME (QCHANGED_CONV blastLib.BBLAST_CONV t)
+                              handle UNCHANGED => NONE | HOL_ERR _ => NONE
+                  in eq_memo := Redblackmap.insert (!eq_memo, t, r); r end
+  in case r of SOME th => th | NONE => raise UNCHANGED end
 local
   val tyvars = [alpha, beta, gamma, delta, etyvar, ftyvar]
   fun add_type (ty, cmp) =
@@ -82,8 +93,9 @@ in
     |> computeLib.add_conv
          (bitstringSyntax.v2w_tm, 1, bitstringLib.v2w_n2w_CONV)
     |> computeLib.add_conv
-         (``$= : α word -> α word -> bool``, 2, QCHANGED_CONV blastLib.BBLAST_CONV)
+         (``$= : α word -> α word -> bool``, 2, memo_eq_conv)
     |> bitstringLib.add_bitstring_compset
+    |> stringLib.add_string_compset
     |> (fn cmp => List.foldl (fn (thy, c) => add_types thy c) cmp thys)
     |> (fn cmp => List.foldl (fn (thy, c) => add_defs thy c) cmp thys)
     (* Register names stay as num_to_dec_string, as in gpr_rel. *)
@@ -148,7 +160,8 @@ in
       [integerTheory.int_ge, integerTheory.int_gt, integerTheory.INT_LT,
        integerTheory.INT_LE, integerTheory.INT_INJ, aslLemmasTheory.w2n_le_word_ls,
        aslLemmasTheory.w2n_lt_31, aslLemmasTheory.w2n_lt_64, aslLemmasTheory.w2n_add_lt_64,
-       aslLemmasTheory.w2n_lt_word_lo, aslLemmasTheory.w2n_eq_n2w])
+       aslLemmasTheory.w2n_lt_word_lo, aslLemmasTheory.word_lo_w2n,
+       aslLemmasTheory.int_sub_lt_0, aslLemmasTheory.w2n_eq_n2w])
   fun decide facts g =
     let
       (* Facts fix registers or their bits to values (the feature register,
@@ -160,8 +173,9 @@ in
         else EQT_INTRO th
       val eqs = map rewrite_of facts
       fun is_word_fact th =
-        not (is_eq (concl th)) orelse
-        wordsSyntax.is_word_type (type_of (lhs (concl th)))
+        not (is_forall (concl th)) andalso
+        (not (is_eq (concl th)) orelse
+         wordsSyntax.is_word_type (type_of (lhs (concl th))))
       val word_facts = List.filter is_word_fact facts
       val hyp = list_mk_conj (map concl word_facts)
       val facts_th = LIST_CONJ word_facts
@@ -199,8 +213,12 @@ in
      decided, rewriting with the equations rws (the state's memory and PC
      as arm64-hol's, say) and evaluating on. *)
   val trace = ref false
-  fun EXEC_WITH_RW facts rws tm =
+  fun exec_with deadline facts rws tm =
     let
+      val t0 = Time.now ()
+      fun out_of_time () =
+        case deadline of NONE => false | SOME d => Time.> (Time.now (), d)
+      fun stamp () = Real.fmt (StringCvt.FIX (SOME 3)) (Time.toReal (Time.- (Time.now (), t0)))
       val globals = free_varsl (tm :: map concl (facts @ rws))
       fun closed g = List.all (fn v => tmem v globals) (free_vars g)
       (* The guards evaluation is stuck on: those of conditionals outside
@@ -211,35 +229,43 @@ in
           in (if closed g then [g] else []) @ guards g end
         else if is_comb t then guards (rator t) @ guards (rand t)
         else []
-      fun first_decided [] = NONE
-        | first_decided (g :: gs) =
-            (case decide facts g of NONE => first_decided gs | d => d)
-      fun continue th conv =
-        case total (CONV_RULE (RAND_CONV conv)) th of
-          SOME th' => if aconv (rhs (concl th')) (rhs (concl th)) then th
-                      else loop th'
-        | NONE => th
-      and loop th =
+      (* Guards that could not be decided stay so: the facts do not change. *)
+      val undecided = ref (HOLset.empty Term.compare)
+      fun decide_new g =
+        if HOLset.member (!undecided, g) then NONE
+        else case decide facts g of
+               NONE => (undecided := HOLset.add (!undecided, g);
+                        if !trace then print (stamp () ^ " EXEC undecided " ^ term_to_string g ^ "\n") else ();
+                        NONE)
+             | d => d
+      fun loop th =
+        if out_of_time () then th else
         case total (CONV_RULE (RAND_CONV (QCHANGED_CONV (PURE_REWRITE_CONV rws)))) th of
           SOME th' =>
             (if !trace then
-               print ("EXEC rewriting; size " ^
+               print (stamp () ^ " EXEC rewriting; size " ^
                       Int.toString (term_size (rhs (concl th))) ^ "\n")
              else ();
              loop (CONV_RULE (RAND_CONV (QCONV EXEC)) th'))
         | NONE =>
-        case first_decided (guards (rhs (concl th))) of
-          NONE => th
-        | SOME d =>
+        (* Every guard evaluation is stuck on that can be decided, at once:
+           each round evaluates the whole term again. *)
+        case List.mapPartial decide_new
+               (HOLset.listItems (HOLset.addList (HOLset.empty Term.compare,
+                                                  guards (rhs (concl th))))) of
+          [] => th
+        | ds =>
             (if !trace then
-               print ("EXEC decided " ^ term_to_string (lhs (concl d)) ^ " = " ^
-                      term_to_string (rhs (concl d)) ^ "; size " ^
-                      Int.toString (term_size (rhs (concl th))) ^ "\n")
+               List.app (fn d => print (stamp () ^ " EXEC decided " ^ term_to_string (lhs (concl d)) ^
+                                        " = " ^ term_to_string (rhs (concl d)) ^ "\n")) ds
              else ();
-             continue th (QCONV (PURE_ONCE_REWRITE_CONV [d] THENC EXEC)))
+             case total (CONV_RULE (RAND_CONV (QCONV (PURE_REWRITE_CONV ds THENC EXEC)))) th of
+               SOME th' => if aconv (rhs (concl th')) (rhs (concl th)) then th else loop th'
+             | NONE => th)
     in
       loop (QCONV EXEC tm)
     end
+  fun EXEC_WITH_RW facts rws tm = exec_with NONE facts rws tm
   fun EXEC_WITH facts tm = EXEC_WITH_RW facts [] tm
 
   (* Facts from assumptions: arm64_asl_ok and state_rel split into the
@@ -250,7 +276,7 @@ in
   (* Equations evaluated on each side, so that word equations stay
      equations. *)
   fun rel_facts th =
-    th |> PURE_REWRITE_RULE [arm64AslTheory.state_rel_def,
+    th |> PURE_REWRITE_RULE [arm64AslTheory.state_rel_def, arm64AslTheory.vreg_rel_def,
                              arm64AslTheory.flag_rel_def, LET_THM]
        |> BETA_RULE
        |> CONJUNCTS
@@ -273,6 +299,34 @@ in
     in
       PURE_ONCE_REWRITE_TAC [th] (asms, g)
     end
+  (* One slice of evaluation of a subterm of the goal: about slice seconds of
+     it, so that each proof step stays well within the tactic timeout; a
+     proof gives as many such steps as the evaluation takes. Once the term
+     is a single outcome, a slice does nothing. *)
+  val slice = ref 0.6
+  fun is_value_singleton t =
+    pred_setSyntax.is_insert t andalso pred_setSyntax.is_empty (rand t) andalso
+    can (match_term ``Value v``) (fst (pairSyntax.dest_pair (rand (rator t))))
+    handle HOL_ERR _ => false
+  fun exec_step_tac select : tactic = fn (asms, g) =>
+    let
+      val t = select g
+    in
+      if is_value_singleton t then ALL_TAC (asms, g)
+      else
+        let
+          val deadline = Time.+ (Time.now (), Time.fromReal (!slice))
+          val (fs, eqs) = (List.concat ## List.concat)
+                            (ListPair.unzip (map (assum_facts o ASSUME) asms))
+          val th = exec_with (SOME deadline) fs eqs t
+        in
+          if aconv (rhs (concl th)) t then ALL_TAC (asms, g)
+          else PURE_ONCE_REWRITE_TAC [th] (asms, g)
+        end
+    end
+  (* In a goal ∃asl'. t = {(Value (), asl')} ∧ ..., t. *)
+  val EXEC_STEP_TAC = exec_step_tac (lhs o fst o dest_conj o snd o dest_exists)
+  val EXEC_LHS_STEP_TAC = exec_step_tac lhs
   (* Evaluates the left-hand side of the goal. *)
   val EXEC_TAC : tactic = fn (asms, g) =>
     EXEC_AT_TAC (lhs g) [] (asms, g)

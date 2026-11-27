@@ -47,7 +47,7 @@ End
    models. Every other feature is not implemented. *)
 Definition asl_profile_def:
   asl_profile =
-    [FEAT_FP; FEAT_AdvSIMD; FEAT_CRC32; FEAT_AES; FEAT_PMULL; FEAT_SHA1;
+    [FEAT_AA64EL0; FEAT_AA64EL1; FEAT_AA64EL2; FEAT_AA64EL3; FEAT_FP; FEAT_AdvSIMD; FEAT_CRC32; FEAT_AES; FEAT_PMULL; FEAT_SHA1;
      FEAT_SHA256; FEAT_SHA512; FEAT_SHA3; FEAT_SM3; FEAT_SM4]
 End
 
@@ -58,8 +58,9 @@ Definition asl_features_def:
 End
 
 (* The system configuration arm64-hol assumes: Non-secure state, MPAM
-   disabled, the features above, AArch64 at EL0 on SP_EL0, no alignment
-   checking of ordinary accesses, little-endian data, no top-byte ignore,
+   disabled, the features above, AArch64 at EL0 on SP_EL0, SIMD and
+   floating-point instructions enabled at EL0, no alignment checking of
+   ordinary accesses, little-endian data, no top-byte ignore,
    not halted in debug state, and no statistical profiling sample in
    flight. *)
 Definition arm64_asl_ok_def:
@@ -68,6 +69,10 @@ Definition arm64_asl_ok_def:
      p.ProcState_EL = 0w ∧ p.ProcState_nRW = 0w ∧ p.ProcState_SP = 0w) ∧
     (let sctlr = (SCTLR_EL1_ref.read_from asl.regstate).SCTLR_EL1_Type_bits in
      ¬word_bit 1 sctlr ∧ ¬word_bit 24 sctlr) ∧
+    (let cpacr = (CPACR_EL1_ref.read_from asl.regstate).CPACR_EL1_Type_bits in
+     word_bit 20 cpacr ∧ word_bit 21 cpacr) ∧
+    ¬word_bit 10 (CPTR_EL2_ref.read_from asl.regstate).CPTR_EL2_Type_bits ∧
+    ¬word_bit 10 (CPTR_EL3_ref.read_from asl.regstate).CPTR_EL3_Type_bits ∧
     (let tcr = (TCR_EL1_ref.read_from asl.regstate).TCR_EL1_Type_bits in
      ¬word_bit 37 tcr ∧ ¬word_bit 38 tcr) ∧
     (let status = (5 >< 0) (EDSCR_ref.read_from asl.regstate).EDSCR_Type_bits : 6 word in

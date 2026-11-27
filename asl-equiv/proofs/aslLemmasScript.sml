@@ -186,6 +186,19 @@ Proof
   simp[wordsTheory.WORD_LO]
 QED
 
+Theorem word_lo_w2n:
+  k < dimword(:α) ⇒ (k < w2n (w:α word) ⇔ n2w k <+ w)
+Proof
+  simp[wordsTheory.WORD_LO]
+QED
+
+(* Bounds checks on list indices compare differences with 0. *)
+Theorem int_sub_lt_0:
+  &a − &b < 0 : int ⇔ a < b
+Proof
+  intLib.ARITH_TAC
+QED
+
 Theorem w2n_eq_n2w:
   k < dimword(:α) ⇒ (w2n (w:α word) = k ⇔ w = n2w k)
 Proof
@@ -331,4 +344,25 @@ Theorem flags_word_bits:
 Proof
   PairCases_on `f` >> Cases_on `f0` >> Cases_on `f1` >> Cases_on `f2` >> Cases_on `f3` >>
   EVAL_TAC
+QED
+
+Theorem extract_63_0_2048[local]:
+  (63 >< 0) (x : 2048 word) : word64 = w2w (w2w x : word128)
+Proof
+  srw_tac [wordsLib.WORD_BIT_EQ_ss] []
+QED
+
+(* The low 64 bits of the specification's Z register for a SIMD&FP register
+   number, as evaluation leaves them, as arm64-hol's. *)
+Theorem state_rel_vreg64:
+  state_rel s asl ⇒
+  (63 >< 0) (EL (Num (ABS (31 − &w2n n)))
+               (asl.regstate.vector_32_bitvector_2048_reg "_Z")) : word64 =
+  w2w (s.vregs n)
+Proof
+  rw[state_rel_def, vreg_rel_def, armv9_typesTheory.Z_ref_def] >>
+  `w2n n < 32` by (Cases_on `n` >> fs[]) >>
+  first_x_assum (qspec_then `w2n n` mp_tac) >>
+  simp[sail2_valuesTheory.access_list_dec_def, sail2_valuesTheory.access_list_inc_def,
+       sail2_valuesTheory.nat_of_int_def, integerTheory.INT_SUB, extract_63_0_2048]
 QED
