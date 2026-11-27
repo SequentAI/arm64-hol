@@ -112,11 +112,6 @@ Definition asl_sim_def:
              state_rel s' asl' ∧ arm64_asl_ok asl'
 End
 
-(* arm64-hol's features in the target profile. *)
-Definition asl_feat_def:
-  asl_feat = <| asimd := T; crc32 := T; aes := T; pmull := T |>
-End
-
 (* Profile completeness, the converse of simulation: whenever the
    specification steps successfully from a state related to one arm64-hol
    can fetch from, arm64-hol decodes the instruction, and its step, unless it
@@ -128,8 +123,8 @@ Definition asl_complete_def:
       state_rel s asl ∧ arm64_asl_ok asl ∧ s.pc && 3w = 0w ∧
       access_ok functional_storage Execute 4 s s.pc ∧
       (Value (), asl') ∈ arm64_asl_next asl ⇒
-      IS_SOME (decode asl_feat (fetch functional_storage s)) ∧
-      ∀s'. step asl_feat s = Next s' ⇒ state_rel s' asl'
+      IS_SOME (decode armv9_4 (fetch functional_storage s)) ∧
+      ∀s'. step armv9_4 s = Next s' ⇒ state_rel s' asl'
 End
 
 (* The specification writes a register by updating a function from register
