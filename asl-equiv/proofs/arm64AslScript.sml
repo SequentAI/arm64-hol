@@ -18,10 +18,11 @@ Definition vreg_rel_def:
     ∀n. n < 32 ⇒ s.vregs (n2w n) = w2w (access_list_dec (Z_ref.read_from r) (&n))
 End
 
-(* Every byte of the 64-bit address space is mapped. *)
-Definition mem_rel_def:
-  mem_rel (s:arm64_state) (m:memstate) ⇔
-    ∀a. FLOOKUP m (w2n a) = SOME (MAP bitU_of_bool (w2v (s.mem a)))
+(* The specification's memory holding arm64-hol's: every byte of the 64-bit
+   address space is mapped, as a list of bits, most significant first. *)
+Definition asl_mem_def:
+  asl_mem (m:word64 -> word8) : memstate =
+    FUN_FMAP (λa. MAP bitU_of_bool (w2v (m (n2w a)))) (count (dimword(:64)))
 End
 
 Definition flag_rel_def:
@@ -32,7 +33,7 @@ Definition state_rel_def:
   state_rel (s:arm64_state) (asl:regstate sequential_state) ⇔
     gpr_rel s asl.regstate ∧
     vreg_rel s asl.regstate ∧
-    mem_rel s asl.memstate ∧
+    asl.memstate = asl_mem s.mem ∧
     PC_ref.read_from asl.regstate = s.pc ∧
     SP_EL0_ref.read_from asl.regstate = s.sp ∧
     (let p = PSTATE_ref.read_from asl.regstate in
@@ -42,9 +43,25 @@ Definition state_rel_def:
      flag_rel (SND (SND (SND s.nzcv))) p.ProcState_V)
 End
 
-(* The system configuration arm64-hol assumes: AArch64 at EL0, no alignment
+(* The Armv9.4-A features implemented: those whose instructions arm64-hol
+   models. Every other feature is not implemented. *)
+Definition asl_profile_def:
+  asl_profile =
+    [FEAT_FP; FEAT_AdvSIMD; FEAT_CRC32; FEAT_AES; FEAT_PMULL; FEAT_SHA1;
+     FEAT_SHA256; FEAT_SHA512; FEAT_SHA3; FEAT_SM3; FEAT_SM4]
+End
+
+(* The specification's feature register, indexed from its end. *)
+Definition asl_features_def:
+  asl_features =
+    REVERSE (GENLIST (λi. MEM (&i) (MAP num_of_Feature asl_profile)) 259)
+End
+
+(* The system configuration arm64-hol assumes: Non-secure state, MPAM
+   disabled, the features above, AArch64 at EL0, no alignment
    checking of ordinary accesses, little-endian data, no top-byte ignore,
-   and not halted in debug state. *)
+   not halted in debug state, and no statistical profiling sample in
+   flight. *)
 Definition arm64_asl_ok_def:
   arm64_asl_ok (asl:regstate sequential_state) ⇔
     (let p = PSTATE_ref.read_from asl.regstate in
@@ -54,7 +71,12 @@ Definition arm64_asl_ok_def:
     (let tcr = (TCR_EL1_ref.read_from asl.regstate).TCR_EL1_Type_bits in
      ¬word_bit 37 tcr ∧ ¬word_bit 38 tcr) ∧
     (let status = (5 >< 0) (EDSCR_ref.read_from asl.regstate).EDSCR_Type_bits : 6 word in
-     status ≠ 0b000001w ∧ status ≠ 0b000010w)
+     status ≠ 0b000001w ∧ status ≠ 0b000010w) ∧
+    FeatureImpl_ref.read_from asl.regstate = asl_features ∧
+    word_bit 0 (SCR_EL3_ref.read_from asl.regstate).SCR_EL3_Type_bits ∧
+    ¬word_bit 63 (MPAM3_EL3_ref.read_from asl.regstate).MPAM3_EL3_Type_bits ∧
+    ¬word_bit 63 (MPAM2_EL2_ref.read_from asl.regstate).MPAM2_EL2_Type_bits ∧
+    ¬SPESampleInFlight_ref.read_from asl.regstate
 End
 
 (* One step of the specification: fetch the instruction at PC, execute it,

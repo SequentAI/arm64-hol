@@ -115,3 +115,155 @@ Proof
        wordsTheory.add_with_carry_def, arm64IsaTheory.result_flags_def, flags_word_def] >>
   rw[]
 QED
+
+(* The specification reads and writes general-purpose registers through a
+   choice among the 31 of them; these state that choice for an arbitrary
+   register number. *)
+
+(* Proves ∀k. k < c ⇒ P k by proving each instance with c. *)
+fun bounded_forall_conv c t =
+  (numLib.BOUNDED_FORALL_CONV c THENC
+   TRY_CONV (RAND_CONV (bounded_forall_conv c))) t
+
+val register_conv = SIMP_CONV bool_ss [FUN_EQ_THM] THENC EVAL
+
+Theorem read_gpr_num[local]:
+  ∀k. k < 31 ⇒
+      read_gpr (&k) =
+        (λs. {(Value (s.regstate.bitvector_64_reg ("R" ++ num_to_dec_string k)), s)})
+Proof
+  CONV_TAC (bounded_forall_conv register_conv) >> simp[]
+QED
+
+Theorem read_gpr_eq:
+  read_gpr n =
+    if 0 ≤ n ∧ n < 31 then
+      (λs. {(Value (s.regstate.bitvector_64_reg ("R" ++ num_to_dec_string (Num n))), s)})
+    else read_regS R30_ref
+Proof
+  IF_CASES_TAC
+  >- (`∃k. n = &k ∧ k < 31` by (qexists_tac `Num n` >> intLib.ARITH_TAC) >>
+      gvs[read_gpr_num]) >>
+  simp[armv9_p1Theory.read_gpr_def] >>
+  rpt (IF_CASES_TAC >- gvs[]) >> rw[]
+QED
+
+Theorem write_gpr_num[local]:
+  ∀k. k < 31 ⇒
+      write_gpr (&k) v =
+        (λs. {(Value (),
+               s with regstate :=
+                 s.regstate with bitvector_64_reg :=
+                   (λreg. if reg = "R" ++ num_to_dec_string k then v
+                          else s.regstate.bitvector_64_reg reg))})
+Proof
+  CONV_TAC (bounded_forall_conv register_conv) >> simp[]
+QED
+
+Theorem write_gpr_eq:
+  write_gpr n v =
+    if 0 ≤ n ∧ n < 31 then
+      (λs. {(Value (),
+             s with regstate :=
+               s.regstate with bitvector_64_reg :=
+                 (λreg. if reg = "R" ++ num_to_dec_string (Num n) then v
+                        else s.regstate.bitvector_64_reg reg))})
+    else write_regS R30_ref v
+Proof
+  IF_CASES_TAC
+  >- (`∃k. n = &k ∧ k < 31` by (qexists_tac `Num n` >> intLib.ARITH_TAC) >>
+      gvs[write_gpr_num]) >>
+  simp[armv9_p1Theory.write_gpr_def] >>
+  rpt (IF_CASES_TAC >- gvs[]) >> rw[]
+QED
+
+(* Register numbers are words' unsigned values; these state comparisons of
+   them as comparisons of words, which bit-blasting decides. *)
+
+Theorem w2n_lt_word_lo:
+  k < dimword(:α) ⇒ (w2n (w:α word) < k ⇔ w <+ n2w k)
+Proof
+  simp[wordsTheory.WORD_LO]
+QED
+
+Theorem w2n_eq_n2w:
+  k < dimword(:α) ⇒ (w2n (w:α word) = k ⇔ w = n2w k)
+Proof
+  Cases_on `w` >> simp[]
+QED
+
+Theorem w2n_le_word_ls:
+  k < dimword(:α) ⇒ (w2n (w:α word) ≤ k ⇔ w <=+ n2w k)
+Proof
+  simp[wordsTheory.WORD_LS]
+QED
+
+(* A lookup in the specification's memory is a bounds check. *)
+Theorem FLOOKUP_asl_mem:
+  FLOOKUP (asl_mem m) k =
+    if k < 18446744073709551616 then SOME (MAP bitU_of_bool (w2v (m (n2w k))))
+    else NONE
+Proof
+  simp[asl_mem_def, finite_mapTheory.FLOOKUP_FUN_FMAP]
+QED
+
+(* Alignment, which the specification computes with integer division, as
+   shifts of words. *)
+Theorem n2w_align[local]:
+  ∀k. n2w (2 ** k * (w2n (x:α word) DIV 2 ** k)) : α word = x >>> k << k
+Proof
+  gen_tac >>
+  `x >>> k = n2w (w2n x DIV 2 ** k)`
+    by (`w2n (x >>> k) = w2n x DIV 2 ** k` by simp[wordsTheory.w2n_lsr] >>
+        pop_assum (SUBST1_TAC o SYM) >> simp[]) >>
+  simp[wordsTheory.WORD_MUL_LSL, wordsTheory.word_mul_n2w]
+QED
+
+Theorem align_bits_word:
+  align_bits instance_Sail2_values_Bitvector_Machine_word_mword_dict (x:α word) y =
+    if y = 1 then x else if y = 2 then x >>> 1 << 1
+    else if y = 4 then x >>> 2 << 2 else if y = 8 then x >>> 3 << 3
+    else if y = 16 then x >>> 4 << 4
+    else i2w (&w2n x / y * y)
+Proof
+  simp[sail2_valuesTheory.align_bits_def, sail2_valuesTheory.align_int_def,
+       sail2_valuesTheory.instance_Sail2_values_Bitvector_Machine_word_mword_dict_def,
+       lemTheory.w2ui_def] >>
+  rw[] >> simp[integer_wordTheory.i2w_pos] >>
+  simp (map (fn k => SIMP_RULE (srw_ss()) [] (Q.SPEC k n2w_align))
+            [`1`, `2`, `3`, `4`])
+QED
+
+(* Memory reads check that each byte address, w2n a + k, is in range. *)
+Theorem w2n_lt_64:
+  w2n (w:word64) < 18446744073709551616
+Proof
+  mp_tac (INST_TYPE [alpha |-> ``:64``] wordsTheory.w2n_lt) >> simp[]
+QED
+
+Theorem w2n_add_lt_64:
+  0 < k ∧ k < 18446744073709551616 ⇒
+  (w2n (w:word64) + k < 18446744073709551616 ⇔
+   w <+ n2w (18446744073709551616 - k))
+Proof
+  strip_tac >> simp[wordsTheory.WORD_LO]
+QED
+
+(* Memory reads address byte k of an access as n2w (w2n a + k). *)
+Theorem n2w_w2n_add:
+  n2w (w2n (w:α word) + k) = w + n2w k
+Proof
+  simp[GSYM wordsTheory.word_add_n2w]
+QED
+
+(* Bits of memory are bitU_of_bool of the bits of bytes; reading them back
+   gives the bits. *)
+Theorem bool_of_bitU_eq:
+  bool_of_bitU B0 = SOME F ∧ bool_of_bitU B1 = SOME T ∧ bool_of_bitU BU = NONE ∧
+  bool_of_bitU (if b then B1 else B0) = SOME b
+Proof
+  simp[sail2_valuesTheory.bool_of_bitU_def] >> Cases_on `b` >> simp[]
+QED
+
+(* The feature register as a list of literals, for evaluation. *)
+Theorem asl_features_eq = EVAL ``asl_features``

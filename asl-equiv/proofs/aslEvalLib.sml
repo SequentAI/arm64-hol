@@ -29,6 +29,8 @@ local
      never added, rather than removed afterwards. *)
   val overrides = [
     aslLemmasTheory.AddWithCarry_add_with_carry,
+    aslLemmasTheory.read_gpr_eq, aslLemmasTheory.write_gpr_eq,
+    aslLemmasTheory.n2w_w2n_add, aslLemmasTheory.bool_of_bitU_eq,
     sail2_valuesAuxiliaryTheory.bools_of_nat_aux_rw]
   fun head th =
     th |> CONJUNCTS |> hd |> SPEC_ALL |> concl |> lhs |> strip_comb |> fst
@@ -39,10 +41,14 @@ local
     if overrides_def th then cmp
     else computeLib.add_thms [th] cmp handle HOL_ERR _ => cmp
   (* Register writes are added as function updates (update_lambda), which
-     evaluation reduces without going under a binder. *)
+     evaluation reduces without going under a binder; alignment on words as
+     shifts (align_bits_word), since evaluation unfolds the dictionary
+     argument before an equation for align_bits could match it. *)
+  val def_rewrites =
+    [arm64AslTheory.update_lambda, aslLemmasTheory.align_bits_word]
   fun add_defs thy cmp =
     List.foldl add_def cmp
-      (map (PURE_REWRITE_RULE [arm64AslTheory.update_lambda] o unpack o #thm)
+      (map (PURE_REWRITE_RULE def_rewrites o unpack o #thm)
            (DefnBase.thy_userdefs {thyname = thy}))
   val thys = [
     "lem_machine_word", "lem", "sail2_instr_kinds", "sail2_operators_bitlists",
@@ -69,6 +75,9 @@ in
     |> optionLib.OPTION_rws
     |> combinLib.add_combin_compset
     |> wordsLib.add_words_compset true
+    (* add_with_carry stays as it is: AddWithCarry_add_with_carry states the
+       specification's AddWithCarry with it, as arm64-hol does. *)
+    |> (fn c => computeLib.scrub_const c wordsSyntax.add_with_carry_tm)
     |> intReduce.add_int_compset
     |> computeLib.add_conv
          (bitstringSyntax.v2w_tm, 1, bitstringLib.v2w_n2w_CONV)
@@ -77,7 +86,11 @@ in
     |> bitstringLib.add_bitstring_compset
     |> (fn cmp => List.foldl (fn (thy, c) => add_types thy c) cmp thys)
     |> (fn cmp => List.foldl (fn (thy, c) => add_defs thy c) cmp thys)
-    |> computeLib.add_thms overrides
+    (* Register names stay as num_to_dec_string, as in gpr_rel. *)
+    |> (fn c => computeLib.scrub_const c ``num_to_dec_string``)
+    |> computeLib.add_thms
+         (map (PURE_REWRITE_RULE [arm64AslTheory.update_lambda]) overrides)
+    |> computeLib.add_thms [aslLemmasTheory.FLOOKUP_asl_mem, sumTheory.sum_case_def]
     |> computeLib.add_thms entry_defs
     |> computeLib.add_thms [pred_setTheory.IMAGE_INSERT, pred_setTheory.IMAGE_EMPTY,
          pred_setTheory.BIGUNION_INSERT, pred_setTheory.BIGUNION_EMPTY,
@@ -98,21 +111,46 @@ in
   (* Evaluates a definition about the specification's state with every
      definition of the specification, splitting it into its conjuncts. *)
   fun facts_of defs th =
-    th |> CONV_RULE (computeLib.CBV_CONV (computeLib.add_thms defs exec_cmp))
+    th |> CONV_RULE (computeLib.CBV_CONV
+                       (computeLib.add_thms (wordsTheory.word_bit_def :: defs) exec_cmp))
        |> CONJUNCTS
 
-  (* Proves a guard true or false from facts about bits of registers. *)
+  (* Proves a guard true or false from facts about bits of registers. Integer
+     comparisons of words' values become comparisons of words first. *)
+  val guard_conv =
+    QCONV (SIMP_CONV (srw_ss())
+      [integerTheory.int_ge, integerTheory.int_gt, integerTheory.INT_LT,
+       integerTheory.INT_LE, integerTheory.INT_INJ, aslLemmasTheory.w2n_le_word_ls,
+       aslLemmasTheory.w2n_lt_64, aslLemmasTheory.w2n_add_lt_64,
+       aslLemmasTheory.w2n_lt_word_lo, aslLemmasTheory.w2n_eq_n2w])
   fun decide facts g =
     let
-      val hyp = list_mk_conj (map concl facts)
-      val facts_th = LIST_CONJ facts
+      (* Facts fix registers or their bits to values (the feature register,
+         say); rewriting with them and evaluating can settle a guard by
+         itself. *)
+      fun rewrite_of th =
+        if is_eq (concl th) then th
+        else if is_neg (concl th) then EQF_INTRO th
+        else EQT_INTRO th
+      val eqs = map rewrite_of facts
+      fun is_word_fact th =
+        not (is_eq (concl th)) orelse
+        wordsSyntax.is_word_type (type_of (lhs (concl th)))
+      val word_facts = List.filter is_word_fact facts
+      val hyp = list_mk_conj (map concl word_facts)
+      val facts_th = LIST_CONJ word_facts
+      val pre = QCONV (PURE_REWRITE_CONV eqs THENC EXEC THENC guard_conv) g
+      val g' = rhs (concl pre)
       fun prove t = SOME (MP (blastLib.BBLAST_PROVE (mk_imp (hyp, t))) facts_th)
                     handle HOL_ERR _ => NONE | UNCHANGED => NONE
     in
-      case prove g of
-        SOME th => SOME (EQT_INTRO th)
-      | NONE => Option.map EQF_INTRO (prove (mk_neg g))
+      if aconv g' T orelse aconv g' F then SOME pre
+      else
+        case prove g' of
+          SOME th => SOME (TRANS pre (EQT_INTRO th))
+        | NONE => Option.map (fn th => TRANS pre (EQF_INTRO th)) (prove (mk_neg g'))
     end
+    handle HOL_ERR _ => NONE
 
   (* Evaluates an execution of the specification on a state, deciding each
      conditional it gets stuck on from the facts. *)
@@ -149,6 +187,18 @@ in
     in
       loop (EXEC tm)
     end
+
+  (* Evaluates the left-hand side of the goal with the assumptions as facts:
+     arm64_asl_ok split into the conditions it states, the others as they
+     are. *)
+  val ok_facts =
+    facts_of [arm64AslTheory.arm64_asl_ok_def, aslLemmasTheory.asl_features_eq]
+  fun assum_facts th =
+    if same_const (fst (strip_comb (concl th))) ``arm64_asl_ok`` then ok_facts th
+    else [th]
+  val EXEC_TAC =
+    ASSUM_LIST (fn ths =>
+      CONV_TAC (LHS_CONV (EXEC_WITH (List.concat (map assum_facts ths)))))
 end
 
 end
