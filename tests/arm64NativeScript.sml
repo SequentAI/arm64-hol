@@ -92,31 +92,21 @@ val simd_cases =
                   end)
     (fst (listSyntax.dest_list (rhs (concl native_simd_cases_def))));
 
+val () = cv_auto_trans agrees_at_def;
+val () = cv_auto_trans test_state_def;
+
 fun check i =
   let
     val name = "native_case_" ^ Int.toString i
     val def = DB.fetch "arm64NativeCases" (name ^ "_def")
-    val sample = rhs (concl def)
-    val (word, rest) = pairSyntax.dest_pair sample
-    val (instr, rest) = pairSyntax.dest_pair rest
-    val initial = fst (pairSyntax.dest_pair rest)
     val vbase = case List.find (fn (index, _) => i = index) simd_cases of
                   SOME (_, base) => base
                 | NONE => 0
     val base = numSyntax.term_of_int vbase
-    val prepared = EVAL ``test_state_at ^base ^word ^initial``
-    val decoded = cv_eval ``decode ^enabled ^word``
-    val encoded = cv_eval ``encode ^instr``
-    val state = rhs (concl prepared)
-    val stepped = cv_eval ``step_cv ^enabled ^state``
-    val predicate = if vbase = 0 then ``agrees`` else ``agrees_at ^base``
-    val comparison = REWRITE_CONV
-      [agrees_def, agrees_at_def, feature, prepared, decoded, encoded, stepped]
-      (mk_comb (predicate, sample))
-    val result = EQT_ELIM (TRANS comparison (EVAL (rhs (concl comparison))))
+    val result = EQT_ELIM (cv_eval ``agrees_at ^base ^(rhs (concl def))``)
   in
     ignore (save_thm (name ^ "_agrees",
-      PURE_REWRITE_RULE [GSYM def] result))
+      PURE_REWRITE_RULE [GSYM def, GSYM agrees_def] result))
   end;
 
 fun check_fault name feat input reason =
@@ -236,14 +226,19 @@ val () = check_fault "q_store_checks_sp_before_access" enabled
   ``test_state 0x3d8003e0w ^initial with sp := 4097w`` ``SPAlignment``;
 val () = check_fault "umulh_rejects_reserved_accumulator" enabled
   ``test_state 0x9bc07800w ^initial`` ``Unsupported``;
+val no_asimd = EVAL ``^enabled with asimd := F``;
 val () = app (fn (index, _) =>
   let
     val name = "native_case_" ^ Int.toString index
     val sample = rhs (concl (DB.fetch "arm64NativeCases" (name ^ "_def")))
     val (word, _) = pairSyntax.dest_pair sample
+    val state = ``test_state ^word ^initial``
+    val result = TRANS (AP_THM (AP_TERM ``step_cv`` no_asimd) state)
+      (cv_eval ``step_cv ^(rhs (concl no_asimd)) ^state``)
   in
-    check_fault (name ^ "_requires_asimd") ``^enabled with asimd := F``
-      ``test_state ^word ^initial`` ``Unsupported``
+    if aconv (rhs (concl result)) ``Fault Unsupported : finite_state arm64_result``
+    then ignore (save_thm (name ^ "_requires_asimd", result))
+    else raise Fail (name ^ "_requires_asimd: expected Fault Unsupported")
   end) simd_cases;
 
 val count = numSyntax.int_of_term (rhs (concl native_case_count_def));
