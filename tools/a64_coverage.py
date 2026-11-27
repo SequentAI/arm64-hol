@@ -905,11 +905,10 @@ def hol_evidence(repo: Path, clauses: list[Clause], by_group, interp: Interp):
 
 ADD_OPTIONS = {
     "immediate": (0, 1 << 22),
-    "shiftedreg": tuple((shift << 22) | (amount << 10)
-                        for shift in range(3) for amount in (0, 1, 31)),
     "extendedreg": tuple((option << 13) | (amount << 10)
                           for option in range(8) for amount in range(5)),
     "carry": (0,),
+    "shiftedreg": (),
 }
 
 
@@ -922,7 +921,12 @@ def add_probes(clauses: list[Clause], by_group, interp: Interp) -> dict[tuple[st
             continue
         form = clause.instr_class.removeprefix(prefix)
         for sf in (0, 1):
-            for fields in ADD_OPTIONS[form]:
+            options = ADD_OPTIONS[form]
+            if form == "shiftedreg":
+                amounts = (0, 1, 31, 32, 63) if sf else (0, 1, 31)
+                options = tuple((shift << 22) | (amount << 10)
+                                for shift in range(3) for amount in amounts)
+            for fields in options:
                 word = clause.value | (sf << 31) | fields
                 status, owner = sail_decode(word, clauses, by_group, interp)
                 if status != "valid" or owner != clause:
@@ -933,19 +937,55 @@ def add_probes(clauses: list[Clause], by_group, interp: Interp) -> dict[tuple[st
     return dict(probes)
 
 
-def check_add(repo: Path, clauses: list[Clause], by_group, interp: Interp) -> None:
-    probes = add_probes(clauses, by_group, interp)
-    words = [word for row in probes.values() for word in row]
+def decode_state(valid: int, hit: int) -> str:
+    return ("unsampled" if valid == 0 else "covered" if hit == valid
+            else "partial" if hit else "missing")
 
-    def missing(decoded: list[bool]) -> set[tuple[str, int]]:
-        results = dict(zip(words, decoded, strict=True))
-        return {row for row, cases in probes.items() if not all(results[w] for w in cases)}
 
-    baseline = missing(hol_decodes(words, repo))
-    if baseline:
-        raise SystemExit(f"ADD coverage is missing these width rows: {sorted(baseline)}")
+def coverage_report(repo: Path, clauses: list[Clause], rows, probes):
+    words = sorted({w for w, *_ in rows} | {w for cases in probes.values() for w in cases})
+    decoded = dict(zip(words, hol_decodes(words, repo), strict=True))
+    per_clause = defaultdict(Counter)
+    mismatches = []
+    for word, sampled, status, owner in rows:
+        clause = owner or sampled
+        hol = decoded[word]
+        per_clause[clause.index][(status, hol)] += 1
+        if hol and status in ("undefined", "unpredictable"):
+            mismatches.append((word, clause, status))
 
-    target = ("immediate", 0)
+    report = []
+    for clause in clauses:
+        counts = per_clause[clause.index]
+        valid = counts[("valid", True)] + counts[("valid", False)]
+        hit = counts[("valid", True)]
+        report.append({"clause": clause.index, "group": clause.group,
+                       "mnemonic": clause.mnemonic, "class": clause.instr_class,
+                       "decoder": clause.decoder, "area": clause.area,
+                       "mask": f"{clause.mask:08x}", "value": f"{clause.value:08x}",
+                       "exclude": clause.exclude and [f"{x:08x}" for x in clause.exclude],
+                       "features": clause.features, "state": decode_state(valid, hit),
+                       "valid": valid, "decoded": hit,
+                       "unknown": counts[("unknown", True)] + counts[("unknown", False)]})
+    add_widths = []
+    for (form, sf), cases in sorted(probes.items()):
+        hit = sum(decoded[word] for word in cases)
+        add_widths.append({"form": form, "width": 64 if sf else 32,
+                           "state": decode_state(len(cases), hit),
+                           "valid": len(cases), "decoded": hit})
+    return report, add_widths, mismatches
+
+
+def check_add(repo: Path, clauses: list[Clause], rows, probes, report, add_widths) -> None:
+    def by_width(width_rows):
+        return {(row["form"], row["width"]): row["state"] for row in width_rows}
+
+    baseline = by_width(add_widths)
+    missing = [row for row, state in baseline.items() if state != "covered"]
+    if missing:
+        raise SystemExit(f"ADD coverage is missing these width rows: {missing}")
+
+    target = ("immediate", 32)
     condition = "else if w && 0x1f800000w = 0x11000000w then"
     with tempfile.TemporaryDirectory(prefix="a64-add-") as directory:
         copy = Path(directory)
@@ -961,11 +1001,15 @@ def check_add(repo: Path, clauses: list[Clause], by_group, interp: Interp) -> No
             raise SystemExit("Could not find the ADD immediate classifier branch to mutate")
         isa.write_text(source.replace(condition, condition + "\n        if ¬sf then NONE else"))
         subprocess.run(["holbuild", "-j4", "build", "arm64IsaCvTheory"], cwd=copy, check=True)
-        regression = missing(hol_decodes(words, copy))
-    if regression != {target}:
-        raise SystemExit(f"Expected only the W immediate ADD row missing, got {sorted(regression)}")
-    print(f"ADD acceptance passed: {len(probes)} width rows, only W immediate lost, "
-          f"Sail denominator {len(clauses)} clauses")
+        mutant_report, mutant_widths, _ = coverage_report(copy, clauses, rows, probes)
+    clause_ids = [row["clause"] for row in report]
+    if len(clause_ids) != len(clauses) or [row["clause"] for row in mutant_report] != clause_ids:
+        raise SystemExit("The ADD mutation changed the Sail coverage denominator")
+    expected = baseline | {target: "missing"}
+    if by_width(mutant_widths) != expected:
+        raise SystemExit(f"Expected only the W immediate ADD row missing, got {mutant_widths}")
+    print(f"ADD acceptance passed: {len(add_widths)} width rows, only W immediate lost, "
+          f"Sail denominator {len(clause_ids)} clauses")
 
 
 # ---------------------------------------------------------------------------
@@ -1001,32 +1045,17 @@ def main() -> None:
         for word in samples(clause, args.samples, rng):
             status, owner = sail_decode(word, clauses, by_group, interp)
             rows.append((word, clause, status, owner))
+    # CAS W0, W1, [X2] is valid at EL0. The model omits atomic accesses.
+    missing_clause = None
+    if args.accept_add:
+        word = 0x88A07C41
+        status, missing_clause = sail_decode(word, clauses, by_group, interp)
+        if status != "valid" or missing_clause.mnemonic != "cas":
+            raise SystemExit(f"Expected Sail to decode {word:08x} as valid CAS, got {status}")
+        rows.append((word, missing_clause, status, missing_clause))
     repo = Path(__file__).resolve().parent.parent
-    decoded = hol_decodes([w for w, *_ in rows], repo)
-
-    per_clause = defaultdict(Counter)
-    mismatches = []
-    for (word, sampled, status, owner), hol in zip(rows, decoded):
-        clause = owner or sampled
-        per_clause[clause.index][(status, hol)] += 1
-        if hol and status in ("undefined", "unpredictable"):
-            mismatches.append((word, clause, status))
-
-    report = []
-    for clause in clauses:
-        counts = per_clause[clause.index]
-        valid = counts[("valid", True)] + counts[("valid", False)]
-        hit = counts[("valid", True)]
-        state = ("unsampled" if valid == 0 else "covered" if hit == valid
-                 else "partial" if hit else "missing")
-        report.append({"clause": clause.index, "group": clause.group,
-                       "mnemonic": clause.mnemonic, "class": clause.instr_class,
-                       "decoder": clause.decoder, "area": clause.area,
-                       "mask": f"{clause.mask:08x}", "value": f"{clause.value:08x}",
-                       "exclude": clause.exclude and [f"{x:08x}" for x in clause.exclude],
-                       "features": clause.features, "state": state,
-                       "valid": valid, "decoded": hit,
-                       "unknown": counts[("unknown", True)] + counts[("unknown", False)]})
+    probes = add_probes(clauses, by_group, interp)
+    report, add_widths, mismatches = coverage_report(repo, clauses, rows, probes)
 
     totals = defaultdict(Counter)
     for row in report:
@@ -1062,6 +1091,7 @@ def main() -> None:
             "sail_commit": None if args.sail else SAIL_COMMIT,
             "sail_sha256": digest,
             "clauses": report,
+            "add_widths": add_widths,
             "mismatches": [f"{w:08x}" for w, *_ in mismatches],
             "unassigned_evidence": unassigned,
             "universal": {
@@ -1072,9 +1102,10 @@ def main() -> None:
     if args.accept_add:
         if mismatches:
             raise SystemExit("HOL4 accepted a sampled encoding rejected by Sail")
-        if not any(row["state"] == "missing" for row in report):
-            raise SystemExit("Acceptance requires a valid, explicitly missing Sail clause")
-        check_add(repo, clauses, by_group, interp)
+        if not any(row["clause"] == missing_clause.index and row["state"] == "missing"
+                   for row in report):
+            raise SystemExit("Expected the valid CAS clause to have state missing")
+        check_add(repo, clauses, rows, probes, report, add_widths)
 
 
 if __name__ == "__main__":
