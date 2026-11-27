@@ -43,8 +43,9 @@ Definition state_rel_def:
      flag_rel (SND (SND (SND s.nzcv))) p.ProcState_V)
 End
 
-(* The Armv9.4-A features implemented: those whose instructions arm64-hol
-   models. Every other feature is not implemented. *)
+(* The Armv9.4-A features implemented: the target profile. arm64-hol does
+   not model the SHA and SM instructions yet; profile completeness
+   (asl_complete) exposes them. Every other feature is not implemented. *)
 Definition asl_profile_def:
   asl_profile =
     [FEAT_AA64EL0; FEAT_AA64EL1; FEAT_AA64EL2; FEAT_AA64EL3; FEAT_FP; FEAT_AdvSIMD; FEAT_CRC32; FEAT_AES; FEAT_PMULL; FEAT_SHA1;
@@ -109,6 +110,26 @@ Definition asl_sim_def:
       execute_with functional_storage i s = Next s' ⇒
       ∃asl'. arm64_asl_next asl = {(Value (), asl')} ∧
              state_rel s' asl' ∧ arm64_asl_ok asl'
+End
+
+(* arm64-hol's features in the target profile. *)
+Definition asl_feat_def:
+  asl_feat = <| asimd := T; crc32 := T; aes := T; pmull := T |>
+End
+
+(* Profile completeness, the converse of simulation: whenever the
+   specification steps successfully from a state related to one arm64-hol
+   can fetch from, arm64-hol decodes the instruction, and its step, unless it
+   faults (on a permission, say, which the specification does not model),
+   reaches a related state. Stated here; not yet proved. *)
+Definition asl_complete_def:
+  asl_complete ⇔
+    ∀s asl asl'.
+      state_rel s asl ∧ arm64_asl_ok asl ∧ s.pc && 3w = 0w ∧
+      access_ok functional_storage Execute 4 s s.pc ∧
+      (Value (), asl') ∈ arm64_asl_next asl ⇒
+      IS_SOME (decode asl_feat (fetch functional_storage s)) ∧
+      ∀s'. step asl_feat s = Next s' ⇒ state_rel s' asl'
 End
 
 (* The specification writes a register by updating a function from register

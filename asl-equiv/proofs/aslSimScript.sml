@@ -1,6 +1,6 @@
 (* The simulation of arm64-hol's step by the Armv9.4-A specification's. *)
 Theory aslSim
-Ancestors aslLemmas arm64Isa
+Ancestors aslLemmas arm64Isa arm64IsaCv
 Libs aslEvalLib
 
 (* Fetching from PC reads the instruction arm64-hol fetches. *)
@@ -97,4 +97,52 @@ Proof
    irule_at (Pos hd) EQ_REFL >>
    imp_res_tac state_rel_vreg64 >>
    gvs (arm64IsaTheory.simd_extract_def :: rel_simps))
+QED
+
+(* An arm64-hol step of an instruction the specification simulates is
+   simulated by the specification's step. *)
+Theorem asl_step_sim:
+  step feat s = Next s' ∧ decode feat (fetch functional_storage s) = SOME i ∧
+  asl_sim i ∧ state_rel s asl ∧ arm64_asl_ok asl ⇒
+  ∃asl'. arm64_asl_next asl = {(Value (), asl')} ∧
+         state_rel s' asl' ∧ arm64_asl_ok asl'
+Proof
+  rw[arm64IsaTheory.step_def, arm64IsaTheory.step_with_def] >>
+  gvs[asl_sim_def] >> imp_res_tac arm64IsaTheory.encode_of_decode >>
+  metis_tac[]
+QED
+
+(* The instructions of the pilot. *)
+Definition asl_pilot_def:
+  asl_pilot i ⇔
+    i = Nop ∨ (∃sf sub flags shift d n imm. i = AddImm sf sub flags shift d n imm) ∨
+    (∃d n. i = SimdTransfer FmovX d n)
+End
+
+Theorem asl_pilot_sim:
+  asl_pilot i ⇒ asl_sim i
+Proof
+  rw[asl_pilot_def] >> simp[asl_sim_nop, asl_sim_add_imm, asl_sim_fmov_x]
+QED
+
+Theorem asl_step_pilot:
+  step feat s = Next s' ∧ decode feat (fetch functional_storage s) = SOME i ∧
+  asl_pilot i ∧ state_rel s asl ∧ arm64_asl_ok asl ⇒
+  ∃asl'. arm64_asl_next asl = {(Value (), asl')} ∧
+         state_rel s' asl' ∧ arm64_asl_ok asl'
+Proof
+  metis_tac[asl_step_sim, asl_pilot_sim]
+QED
+
+(* The same for arm64-hol's executable step, through step_cv_refines. *)
+Theorem asl_step_cv_pilot:
+  step_cv feat c = Next c' ∧
+  decode feat (fetch functional_storage (abstract_state c)) = SOME i ∧
+  asl_pilot i ∧ state_rel (abstract_state c) asl ∧ arm64_asl_ok asl ⇒
+  ∃asl'. arm64_asl_next asl = {(Value (), asl')} ∧
+         state_rel (abstract_state c') asl' ∧ arm64_asl_ok asl'
+Proof
+  strip_tac >> irule asl_step_pilot >>
+  simp[] >> qexistsl_tac [`feat`, `i`, `abstract_state c`] >>
+  simp[arm64IsaCvTheory.step_cv_refines, arm64IsaCvTheory.abstract_result_def]
 QED
