@@ -59,22 +59,29 @@ val l3_compset = computeLib.copy (computeLib.the_compset ())
 val l3_eval = REWRITE_CONV [l3_agrees_def, l3_clz_is_cls_def, arm8_stepTheory.NextStateARM8_def, arm8Theory.Next_def]
   THENC computeLib.CBV_CONV l3_compset;
 
-fun compare predicate name_prefix i =
+fun compare predicate name_prefix mismatch i =
   let
     val name = "native_case_" ^ Int.toString i
     val def = DB.fetch "arm64NativeCases" (name ^ "_def")
     val statement = mk_comb (predicate, rhs (concl def))
     val observed = l3_eval statement
+      handle HOL_ERR err =>
+        raise Fail (name ^ ": l3_eval failed: " ^ Feedback.format_ERR err)
+    val value = rhs (concl observed)
     val result =
-      if aconv (rhs (concl observed)) T then EQT_ELIM observed
-      else raise Fail (name ^ ": L3 evaluation did not match the hardware observation")
+      if aconv value T then EQT_ELIM observed
+      else if aconv value F then raise Fail (name ^ ": " ^ mismatch)
+      else raise Fail (name ^ ": incomplete l3_eval compset evaluation")
   in
     ignore (save_thm (name_prefix ^ name, PURE_REWRITE_RULE [GSYM def] result))
   end;
 
 fun cases def = map numSyntax.int_of_term (fst (listSyntax.dest_list (rhs (concl def))));
 
-val () = List.app (compare ``l3_clz_is_cls`` "l3_clz_is_cls_") (cases arm64NativeCasesTheory.native_l3_clz_zero_def);
+val () = List.app (compare ``l3_clz_is_cls`` "l3_clz_is_cls_"
+  "L3 CLZ discrepancy witness failed") (cases arm64NativeCasesTheory.native_l3_clz_zero_def);
 (* CRCExt is independent of the reflected recurrence in arm64Crypto. *)
-val () = List.app (compare ``l3_agrees`` "l3_crc_agrees_") (cases arm64NativeCasesTheory.native_crc_cases_def);
-val () = List.app (compare ``l3_agrees`` "l3_agrees_") (cases arm64NativeCasesTheory.native_l3_cases_def);
+val () = List.app (compare ``l3_agrees`` "l3_crc_agrees_"
+  "L3 hardware value mismatch") (cases arm64NativeCasesTheory.native_crc_cases_def);
+val () = List.app (compare ``l3_agrees`` "l3_agrees_"
+  "L3 hardware value mismatch") (cases arm64NativeCasesTheory.native_l3_cases_def);
