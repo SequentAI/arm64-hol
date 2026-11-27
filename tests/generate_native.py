@@ -549,7 +549,9 @@ def build_structure_probes() -> None:
         for (element, bytes_), scale in zip(LANE_SIZES, range(4)):
             for selem in range(1, 5):
                 lanes = 16 // bytes_
-                index = lanes - 1 if (selem + scale) % 2 == 0 else (5 * selem + 3) % lanes
+                # Cycle through the top lane, lane 0 and an interior lane.
+                choice = (selem + scale + (0 if load else 1)) % 3
+                index = (lanes - 1, 0, (5 * selem + 3) % lanes)[choice]
                 mode, base = i % 3, 30 if i % 5 == 0 else 28
                 i += 1
                 mnemonic = f"{'ld' if load else 'st'}{selem}"

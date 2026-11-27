@@ -52,7 +52,7 @@ holbuild check arm64CryptoTheory arm64IsaTheory arm64IsaCvTheory \
 - `arm64Crypto` proves equivalence of the modeled AES round operations
   with the corresponding components of HOL4's AES reference implementation.
 - `arm64CryptoVectors` computes the GB/T 32907 SM4 and GB/T 32905 SM3
-  examples with the SM4 and SM3 instruction semantics, which the native
+  examples by stepping assembled SM4 and SM3 instructions, which the native
   hosts cannot execute.
 
 To reproduce the hardware observations, run on AArch64 with CRC32, PMULL,

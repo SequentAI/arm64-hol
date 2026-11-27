@@ -234,6 +234,23 @@ val () = check_fault "q_store_rejects_unwritable_last_byte" enabled
   ``^q_store with perms := insert 4111 (perm T F F) (^q_store).perms`` ``Store``;
 val () = check_fault "q_store_checks_sp_before_access" enabled
   ``test_state 0x3d8003e0w ^initial with sp := 4097w`` ``SPAlignment``;
+(* Structure transfers check every byte and SP alignment before any access. *)
+val multi_load = ``test_state 0x4c40a000w ^initial``;
+val () = check_fault "multi_load_rejects_unreadable_last_byte" enabled
+  ``^multi_load with perms := insert 4127 (perm F F F) (^multi_load).perms`` ``Load``;
+val multi_store = ``test_state 0x4c00a000w ^initial``;
+val () = check_fault "multi_store_rejects_unwritable_last_byte" enabled
+  ``^multi_store with perms := insert 4127 (perm T F F) (^multi_store).perms`` ``Store``;
+val lane_load = ``test_state 0x4d60a400w ^initial``;
+val () = check_fault "lane_load_rejects_unreadable_last_byte" enabled
+  ``^lane_load with perms := insert 4127 (perm F F F) (^lane_load).perms`` ``Load``;
+val lane_store = ``test_state 0x0d20b000w ^initial``;
+val () = check_fault "lane_store_rejects_unwritable_last_byte" enabled
+  ``^lane_store with perms := insert 4111 (perm T F F) (^lane_store).perms`` ``Store``;
+val () = check_fault "multi_load_checks_sp_before_access" enabled
+  ``test_state 0x4c4073e0w ^initial with sp := 4097w`` ``SPAlignment``;
+val () = check_fault "lane_store_checks_sp_before_access" enabled
+  ``test_state 0x0d0003e0w ^initial with sp := 4097w`` ``SPAlignment``;
 val () = check_fault "umulh_rejects_reserved_accumulator" enabled
   ``test_state 0x9bc07800w ^initial`` ``Unsupported``;
 val () = app (fn (index, _) =>
