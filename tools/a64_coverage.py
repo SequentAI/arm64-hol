@@ -8,20 +8,27 @@ random values. A small interpreter for the subset of Sail that the
 `decode_*` functions use classifies each sample as Sail decodes it:
 
   valid       the decoder reaches an `execute_*` call (or ends as a NOP)
-  undefined   the decoder throws `Error_Undefined`
-  unpredictable  the decoder reaches `ConstrainUnpredictable`
-  unknown     the decoder depends on a value the interpreter does not model
+              and the checks at the start of that function pass at EL0
+  undefined   the decoder, or those checks, throw `Error_Undefined`
+  unpredictable  they reach `ConstrainUnpredictable`
+  unknown     the result depends on a value the interpreter does not model,
+              such as the per-register EL0 access rules of system registers
 
-Every optional feature (`Have*()`) counts as implemented. The same words
-are decoded by `decode armv9_4` in HOL4 (`cv_eval`, through `holbuild
-run`). A clause is covered when HOL4 decodes all its valid samples.
-Any sample HOL4 decodes but Sail rejects is listed as a mismatch.
+The checks at the start of an `execute_*` function run up to the first
+statement the interpreter cannot evaluate, with `PSTATE.EL` = EL0.
+Every optional feature (`Have*()`) counts as implemented; each clause
+lists the feature predicates its decoder consults. The same words are
+decoded by `decode armv9_4` in HOL4 (`cv_eval`, through `holbuild run`).
+A clause is covered when HOL4 decodes all its valid samples, and
+unsampled when no sample is valid. Any sample HOL4 decodes but Sail
+rejects is listed as a mismatch.
 
 Usage: a64_coverage.py [--sail instrs64.sail] [--samples N] [--json FILE]
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import random
 import re
@@ -88,6 +95,7 @@ TOKEN = re.compile(r"""
   | (?P<str>"[^"]*")
   | (?P<id>'?[A-Za-z_][A-Za-z0-9_]*)
   | (?P<op>\.\.|==|!=|<=|>=|<<|>>|=>|[-+*@&|<>=(){}\[\],;:.!])
+  | (?P<other>.)
 """, re.X | re.S)
 
 
@@ -121,6 +129,16 @@ class Unpredictable(Exception):
 
 class Unknown(Exception):
     pass
+
+
+class Unmodelled(Exception):
+    """EL0 legality depends on state the interpreter does not model."""
+
+
+# Their EL0 access rules live in the per-register accessors.
+UNMODELLED = {"AArch64_SysRegRead", "AArch64_SysRegWrite", "AArch64_SysRegRead128",
+              "AArch64_SysRegWrite128", "AArch64_SysInstr", "AArch64_SysInstr128",
+              "AArch64_SysInstrWithResult"}
 
 
 @dataclass(frozen=True)
@@ -176,6 +194,19 @@ class Parser:
             self.next()
 
     # Statements -----------------------------------------------------------
+    def prefix(self) -> tuple:
+        """The statements of a function body up to the first it cannot parse."""
+        self.expect("{")
+        stmts = []
+        try:
+            while self.peek() != "}":
+                stmts.append(self.statement())
+                if self.peek() == ";":
+                    self.next()
+        except (SyntaxError, IndexError):
+            stmts.append(("expr", ("call", "unmodelled", [])))
+        return ("block", stmts)
+
     def block(self) -> tuple:
         self.expect("{")
         stmts = []
@@ -225,8 +256,8 @@ class Parser:
             name = self.next()
             self.next()
             return ("let", name, self.expr())
-        if tok == "foreach":
-            raise SyntaxError("foreach")
+        if tok in ("foreach", "var", "while", "repeat"):
+            raise SyntaxError(tok)
         return ("expr", self.expr())
 
     # Expressions ----------------------------------------------------------
@@ -393,7 +424,9 @@ def builtin(name: str, args: list):
             raise See
         if kind == "Unpredictable":
             raise Unpredictable
-        raise Undefined
+        if kind == "Undefined":
+            raise Undefined
+        raise Unknown
     if name == "Error_Undefined":
         return "Undefined"
     if name == "Error_See":
@@ -402,8 +435,12 @@ def builtin(name: str, args: list):
         return "Unpredictable"
     if name == "ConstrainUnpredictable":
         raise Unpredictable
-    if name.startswith("execute_") or name == "EndOfInstruction":
+    if name.startswith("execute_") or name in ("EndOfInstruction", "return"):
         raise Valid
+    if name == "unmodelled":
+        raise Unknown
+    if name in UNMODELLED:
+        raise Unmodelled
     if name in ("assert", "SetBTypeCompatible", "CheckMOPSEnabled",
                 "AArch64_CheckSystemAccess"):
         return None
@@ -525,7 +562,14 @@ class Interp:
             args = [self.run(a, env) for a in node[2]]
             if name in self.functions:
                 params, body = self.functions[name]
-                return self.run(body, dict(zip(params, args)))
+                if not name.startswith("execute_"):
+                    return self.run(body, dict(zip(params, args)))
+                try:
+                    self.run(body, dict(zip(params, args)))
+                except (Unknown, KeyError, TypeError, AttributeError, ValueError,
+                        IndexError, AssertionError):
+                    pass
+                raise Valid
             if any(isinstance(a, str) for a in args) and name in VALUE_BUILTINS:
                 return OPAQUE
             return builtin(name, args)
@@ -541,6 +585,8 @@ class Interp:
                        for i, b in enumerate(pat))
         if pat.startswith(("0b", "0x")):
             return bits_literal(pat).value == as_int(subject)
+        if pat.isdigit():
+            return int(pat) == as_int(subject)
         return pat == subject
 
     @staticmethod
@@ -593,6 +639,7 @@ class Clause:
     mnemonic: str
     instr_class: str
     area: str
+    features: list[str]
     body: tuple = field(repr=False)
 
 
@@ -601,7 +648,8 @@ CLAUSE = re.compile(
     r"if (.*?)SEE < (\d+)\) = (\{.*?\n\})", re.S)
 EXCLUDE = re.compile(r"not_bool\(\(match Slice\(__opcode, (\d+), (\d+)\) \{\s*"
                      r"\[([^\]]*)\] => true,\s*_ => false\s*\}\) : bool\) & $", re.S)
-FUNCTION = re.compile(r"\nfunction (decode_\w+) \(?([^)=]*?)\)? = (\{.*?\n\})", re.S)
+FUNCTION = re.compile(r"\nfunction ((?:decode|execute)_\w+) \(?([^)=]*?)\)? = (\{.*?\n\})", re.S)
+FEATURE = re.compile(r"\b(Have\w+|IsFeatureImplemented\(\w+\))")
 
 
 def bit_pattern(bits: list[str], top: int) -> tuple[int, int]:
@@ -614,11 +662,14 @@ def bit_pattern(bits: list[str], top: int) -> tuple[int, int]:
 
 
 def load_inventory(source: str):
-    functions = {}
+    functions, texts = {}, {}
     for name, params, body in FUNCTION.findall(source):
+        texts[name] = body
+        params = [p.strip() for p in params.split(",")]
         try:
-            functions[name] = ([p.strip() for p in params.split(",")],
-                               Parser(tokenize(body)).block())
+            parser = Parser(tokenize(body))
+            functions[name] = (params, parser.prefix() if name.startswith("execute_")
+                               else parser.block())
         except SyntaxError:
             functions[name] = ([], ("block", [("expr", ("call", "unmodelled", []))]))
     clauses = []
@@ -639,8 +690,9 @@ def load_inventory(source: str):
         decoder = re.findall(r"(decode_\w+)\(", body)[-1]
         mnemonic, _, instr_class = decoder[len("decode_"):].partition("_aarch64_instrs_")
         ast = Parser(tokenize(body)).block()
+        features = sorted(set(FEATURE.findall(guard + body + texts.get(decoder, ""))))
         clauses.append(Clause(index, group, int(see), mask, value, exclude, decoder,
-                              mnemonic, instr_class, area_of(instr_class), ast))
+                              mnemonic, instr_class, area_of(instr_class), features, ast))
     return clauses, functions
 
 
@@ -683,7 +735,8 @@ def sail_decode(word: int, clauses: list[Clause], by_group, interp: Interp):
             return "unpredictable", clause
         except See:
             see = clause.see
-        except (Unknown, KeyError, TypeError, AttributeError, ValueError, AssertionError):
+        except (Unknown, Unmodelled, KeyError, TypeError, AttributeError, ValueError,
+                IndexError, AssertionError):
             return "unknown", clause
     return "undefined", None
 
@@ -759,6 +812,7 @@ def main() -> None:
     else:
         with urllib.request.urlopen(SAIL_URL) as response:
             source = response.read().decode()
+    digest = hashlib.sha256(source.encode()).hexdigest()
     clauses, functions = load_inventory(source)
     by_group = defaultdict(list)
     for clause in clauses:
@@ -791,28 +845,33 @@ def main() -> None:
                  else "partial" if hit else "missing")
         report.append({"clause": clause.index, "group": clause.group,
                        "mnemonic": clause.mnemonic, "class": clause.instr_class,
-                       "area": clause.area, "mask": f"{clause.mask:08x}",
-                       "value": f"{clause.value:08x}", "state": state,
+                       "decoder": clause.decoder, "area": clause.area,
+                       "mask": f"{clause.mask:08x}", "value": f"{clause.value:08x}",
+                       "exclude": clause.exclude and [f"{x:08x}" for x in clause.exclude],
+                       "features": clause.features, "state": state,
                        "valid": valid, "decoded": hit,
                        "unknown": counts[("unknown", True)] + counts[("unknown", False)]})
 
     totals = defaultdict(Counter)
     for row in report:
         totals[row["area"]][row["state"]] += 1
-    print(f"Sail arm-v9.4-a instrs64.sail @ {SAIL_COMMIT[:12]}: {len(clauses)} A64 clauses, "
+    origin = f"{args.sail} (sha256 {digest[:12]})" if args.sail else f"@ {SAIL_COMMIT[:12]}"
+    print(f"Sail arm-v9.4-a instrs64.sail {origin}: {len(clauses)} A64 clauses, "
           f"{len(rows)} sampled words")
-    print(f"{'area':22} {'clauses':>7} {'covered':>7} {'partial':>7} {'missing':>7}")
+    states = ("covered", "partial", "missing", "unsampled")
+    print(f"{'area':22} {'clauses':>7}" + "".join(f" {s:>9}" for s in states))
     for area, _ in AREAS + [("other", ())]:
         t = totals.get(area)
         if t:
-            print(f"{area:22} {sum(t.values()):7} {t['covered']:7} {t['partial']:7} {t['missing']:7}")
+            print(f"{area:22} {sum(t.values()):7}" + "".join(f" {t[s]:9}" for s in states))
     unknown = sum(r["unknown"] for r in report)
     print(f"samples Sail's decoder could not be evaluated on: {unknown}")
     print(f"words HOL4 decodes that Sail does not accept: {len(mismatches)}")
     for word, clause, status in mismatches[:20]:
         print(f"  {word:08x} {clause.mnemonic} ({clause.instr_class}): {status}")
     if args.json:
-        args.json.write_text(json.dumps({"sail_commit": SAIL_COMMIT, "clauses": report,
+        args.json.write_text(json.dumps({"sail_commit": None if args.sail else SAIL_COMMIT,
+                                         "sail_sha256": digest, "clauses": report,
                                          "mismatches": [f"{w:08x}" for w, *_ in mismatches]},
                                         indent=1) + "\n")
 

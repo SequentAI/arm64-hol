@@ -14,6 +14,11 @@ L3_INTEGER_FORMS = {
     "stpx", "stpx_regs", "stpx_zero", "nop", "addsp", "ldrb_sp", "blr",
 }
 
+# Literal probes ("literal" mode) read a pool placed 48 bytes before the
+# probe and 12 bytes after it (past the probe's two closing instructions);
+# the HOL test state maps the same bytes at those offsets from PC 256.
+LITERAL_POOL = [(0x35 + 0x9d * i) & 0xFF for i in range(48)]
+
 # Each expected disassembly is paired with the exact HOL instruction value.
 PROBES = {
     "cbz": ("CompareBranch F F 1w 2w", ("cbz w1,8",)),
@@ -213,9 +218,11 @@ SCALAR_PROBES = [
     ("smsubl", "MulLong F T 0w 1w 2w 3w", "smsubl x0,w1,w2,x3", -1, ""),
     ("umsubl", "MulLong T T 0w 1w 2w 3w", "umsubl x0,w1,w2,x3", -1, ""),
     ("umull", "MulLong T F 0w 1w 2w 31w", "umull x0,w1,w2", -1, ""),
-    ("ldr_lit_w", "LoadLiteral F 0w 1w 0w", "ldr w1,.", -1, ""),
-    ("ldrsw_lit", "LoadLiteral F 2w 1w 0w", "ldrsw x1,.", -1, ""),
-    ("prfm_lit", "LoadLiteral F 3w 0w 0w", "prfm pldl1keep,.", -1, ""),
+    ("ldr_lit_w", "LoadLiteral F 0w 1w 0x7fff5w", "ldr w1,8b+4", -1, "literal"),
+    ("ldr_lit_x", "LoadLiteral F 1w 1w 5w", "ldr x1,9f+8", -1, "literal"),
+    ("ldrsw_lit", "LoadLiteral F 2w 1w 0x7fff6w", "ldrsw x1,8b+8", -1, "literal"),
+    ("ldrsw_lit_pos", "LoadLiteral F 2w 1w 4w", "ldrsw x1,9f+4", -1, "literal"),
+    ("prfm_lit", "LoadLiteral F 3w 0w 3w", "prfm pldl1keep,9f", -1, "literal"),
     ("ldrsb_x", "MemImm F 2w 0w 1w 0w (Scaled 1w)", "ldrsb x1,[x0,#1]", 0, ""),
     ("ldrsb_w_post", "MemImm F 3w 0w 1w 0w (Unscaled PostIndex 1w)", "ldrsb w1,[x0],#1", 0, ""),
     ("ldrsh_w_pre", "MemImm F 3w 1w 1w 0w (Unscaled PreIndex 2w)", "ldrsh w1,[x0,#2]!", 0, ""),
@@ -271,9 +278,11 @@ SCALAR_ALIASES = {
     "asr_x60": ("sbfx x0,x1,#60,#4",),
     "sxtb_x": ("sbfm x0,x1,#0,#7",),
     "ccmp_reg_al": ("ccmp w0,w1,#15,al",),
-    "ldr_lit_w": ("ldr w1,0",),
-    "ldrsw_lit": ("ldrsw x1,0",),
-    "prfm_lit": ("prfm pldl1keep,0",),
+    "ldr_lit_w": ("ldr w1,-44",),
+    "ldr_lit_x": ("ldr x1,20",),
+    "ldrsw_lit": ("ldrsw x1,-40",),
+    "ldrsw_lit_pos": ("ldrsw x1,16",),
+    "prfm_lit": ("prfm pldl1keep,12",),
 }
 
 # In the pinned L3 decoder, bit 10 sends the CLZ encodings to CLS.
@@ -332,7 +341,8 @@ def write_scalar_probes(directory: Path) -> None:
                 asm += [f"word_label {name}", f"    {instruction}", "    b 2f",
                         "1:  mov x12, #8", "    b .Lfinish", "2:  next"]
         else:
-            macro = "stack_probe" if mode in ("stack", "sp_result") else "straight"
+            macro = ("stack_probe" if mode in ("stack", "sp_result")
+                     else "literal_probe" if mode == "literal" else "straight")
             asm += [f'{macro} {name}, "{instruction}"']
         declaration = f"X({name}, {pointer}, {int(mode == 'indexed')}, {int(mode == 'stack')}, 0)"
         if mode == "ccmp_fallback":
@@ -341,7 +351,8 @@ def write_scalar_probes(directory: Path) -> None:
             crc.append(declaration)
         else:
             declarations.append(declaration)
-    (directory / "scalar_probes.S").write_text("\n".join(asm) + "\n")
+    pool = [".macro literal_pool", "    .byte " + ", ".join(map(str, LITERAL_POOL)), ".endm"]
+    (directory / "scalar_probes.S").write_text("\n".join(pool + asm) + "\n")
     (directory / "scalar_probes.h").write_text(
         "#define SCALAR_CASES(X) " + " ".join(declarations) + "\n"
         "#define CCMP_FALLBACK_CASES(X) " + " ".join(fallback) + "\n"
@@ -373,7 +384,10 @@ HIGH_SIMD_PROBES = [
     ("umov_b0", "SimdTransfer UmovB0 2w 31w", "umov w2,v31.b[0]", -1, ()),
     ("umov_d1", "SimdTransfer UmovD1 2w 31w", "umov x2,v31.d[1]", -1, ("mov x2,v31.d[1]",)),
     ("dup_2d", "SimdTransfer Dup2D 31w 1w", "dup v31.2d,x1", -1, ()),
-    ("ldr_lit_s", "LoadLiteral T 0w 30w 0w", "ldr s30,.", -1, ("ldr s30,0",)),
+    ("ldr_lit_s", "LoadLiteral T 0w 30w 4w", "ldr s30,9f+4", -1, ("ldr s30,16",)),
+    ("ldr_lit_d", "LoadLiteral T 1w 31w 0x7fff8w", "ldr d31,8b+16", -1, ("ldr d31,-32",)),
+    ("ldr_lit_q", "LoadLiteral T 2w 30w 7w", "ldr q30,9f+16", -1, ("ldr q30,28",)),
+    ("ldr_lit_q_neg", "LoadLiteral T 2w 31w 0x7fff4w", "ldr q31,8b", -1, ("ldr q31,-48",)),
     ("ldr_b", "MemImm T 1w 0w 30w 1w (Scaled 1w)", "ldr b30,[x1,#1]", 1, ()),
     ("ldr_h_post", "MemImm T 1w 1w 31w 1w (Unscaled PostIndex 2w)", "ldr h31,[x1],#2", 1, ()),
     ("ldr_s_pre", "MemImm T 1w 2w 30w 1w (Unscaled PreIndex 4w)", "ldr s30,[x1,#4]!", 1, ()),
@@ -468,7 +482,8 @@ for name, instruction, assembly, _, aliases, _ in SIMD_PROBES + PERMUTE_SIMD_PRO
 
 
 def write_simd_probes(directory: Path) -> None:
-    asm = [f'straight {name}, "{assembly}"' for name, _, assembly, _, _, _ in SIMD_PROBES + PERMUTE_SIMD_PROBES + CRYPTO_SIMD_PROBES]
+    asm = [f'{"literal_probe" if name.startswith("ldr_lit") else "straight"} {name}, "{assembly}"'
+           for name, _, assembly, _, _, _ in SIMD_PROBES + PERMUTE_SIMD_PROBES + CRYPTO_SIMD_PROBES]
     cases = [
         f"X({name}, {pointer}, {int(name in SIMD_INDEXED)}, 0, {base})"
         for name, _, _, pointer, _, base in SIMD_PROBES
@@ -602,6 +617,11 @@ def generated(directory: Path, objdump: Path) -> tuple[str, int]:
              "Theory arm64NativeCases", "Ancestors arm64Isa", "",
              'Type observation = ``:word64 # word64 # word4 # word64 # word64 list # word128 list # word8 list``',
              'Type native_case = ``:word32 # arm64_instr # observation # observation``',
+             "",
+             "Definition literal_pool_def:",
+             "  literal_pool : word8 list =",
+             "    [" + "; ".join(f"{b}w" for b in LITERAL_POOL) + "]",
+             "End",
              ""]
     l3_cases = []
     l3_clz_zero = []

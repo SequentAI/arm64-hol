@@ -32,10 +32,13 @@ Definition test_state_at_def:
   test_state_at vbase w (pc,sp,flags,link,regs,vectors,data) : finite_state =
     let gpr = insert 30 link (put_many 0 regs LN);
         vec = put_many vbase vectors LN;
-        mem = put_many 4096 data
-          (put_many 256 [byte_at w 0; byte_at w 1; byte_at w 2; byte_at w 3] LN);
-        perms = put_many 4096 (REPLICATE 64 (perm T T F))
-          (put_many 256 (REPLICATE 4 (perm T F T)) LN)
+        code = put_many 208 literal_pool (put_many 268 literal_pool
+          (put_many 256 [byte_at w 0; byte_at w 1; byte_at w 2; byte_at w 3] LN));
+        mem = put_many 4096 data code;
+        code_perms = put_many 208 (REPLICATE 48 (perm T F T))
+          (put_many 268 (REPLICATE 48 (perm T F T))
+            (put_many 256 (REPLICATE 4 (perm T F T)) LN));
+        perms = put_many 4096 (REPLICATE 64 (perm T T F)) code_perms
     in arm64_machine gpr sp pc (nzcv_of_bits flags) vec mem perms
 End
 
