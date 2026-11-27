@@ -6,7 +6,7 @@ name = "arm64-hol"
 version = "0.1.0"
 
 [build]
-members = [".", "isa", "tests"]
+members = [".", "isa", "tests", "asl-equiv"]
 roots = ["arm64HolScript.sml"]
 
 [dependencies.hol]
