@@ -66,8 +66,11 @@ fun compare predicate name_prefix false_message i =
     val statement = mk_comb (predicate, rhs (concl def))
     val observed =
       (l3_eval statement
-       handle HOL_ERR _ =>
-         raise Fail (name ^ ": incomplete l3_eval compset evaluation"))
+       handle HOL_ERR err =>
+         raise Fail (name ^ ": l3_eval HOL error in " ^
+                     Feedback.top_structure_of err ^ "." ^
+                     Feedback.top_function_of err ^ ": " ^
+                     Feedback.message_of err))
     val value = rhs (concl observed)
     val result =
       if aconv value T then EQT_ELIM observed

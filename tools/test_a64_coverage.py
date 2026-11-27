@@ -144,22 +144,36 @@ class A64CoverageTests(unittest.TestCase):
             "dp-reg.divide": 4,
             "load-store.single-immediate-scaled": 8,
             "load-store.single-immediate-unscaled": 9,
-            "load-store.single-register": 4,
+            "load-store.single-register": 8,
             "load-store.pair": 6,
             "dp-reg.variable-shift": 8,
             "dp-imm.bitfield": 4,
-            "dp-imm.extract": 2,
+            "dp-imm.extract.w": 1,
+            "dp-imm.extract.x": 1,
             "crypto.pmull": 2,
         }
         for form_id, count in expected_probe_counts.items():
             form = next(form for form in INVENTORY if form.form_id == form_id)
             self.assertEqual(len(_probe_words(form)), count, form_id)
 
+    def test_register_offset_rejects_reserved_options(self):
+        form = next(form for form in INVENTORY if form.form_id == "load-store.single-register")
+        self.assertFalse(_encoding_matches(form, 0x38200800))
+        self.assertTrue(_encoding_matches(form, 0x38606800))
+
+    def test_acceptance_marker_preserves_decode_evidence(self):
+        report = _coverage_with_marker(ROOT, "dp-imm.addsub-immediate.w")
+        row = next(item for item in report["rows"] if item["form_id"] == "dp-imm.addsub-immediate.w")
+        self.assertTrue(row["evidence"]["decode"])
+        self.assertTrue(row["evidence"]["execution"])
+        self.assertTrue(row["evidence"]["acceptance_failure"])
+
     def test_unimplemented_architectural_samples_have_one_partition(self):
         samples = (
             0xF8200020, 0xC8A07C00, 0xACC00440, 0xADC00440, 0xAC800440,
             0x3CE06800, 0x3C800400, 0x6EA08420, 0x4EA09C20, 0x5E280800,
             0x4E20D400, 0xD53BD040, 0x0E000000, 0x4E002000,
+            0xD8000000, 0xF9800000, 0xAD800440, 0x9B220C20, 0x5E282800,
         )
         for word in samples:
             matches = [form.form_id for form in INVENTORY if _encoding_matches(form, word)]

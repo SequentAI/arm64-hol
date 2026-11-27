@@ -953,13 +953,15 @@ QED
 
 Definition a64_decode_coverage_variants_5b_def:
   a64_decode_coverage_variants_5b = [
+     (0x38204800w, 16w); (0x38606800w, 16w); (0x3860c800w, 16w);
+     (0x38605800w, 16w); (0x3820e800w, 16w);
      (0x78204800w, 16w); (0xb8204800w, 16w); (0xf8204800w, 16w);
      (0xa8800440w, 17w);
      (0x1ac02400w, 23w); (0x1ac02800w, 23w); (0x1ac02c00w, 23w);
      (0x9ac02000w, 23w); (0x9ac02400w, 23w); (0x9ac02800w, 23w);
      (0x9ac02c00w, 23w);
      (0x53000000w, 24w); (0x93400000w, 24w); (0xd3400000w, 24w);
-     (0x93c00000w, 25w);
+     (0x13800000w, 25w); (0x93c00000w, 25w);
      (0x4ee0e000w, 41w)]
 End
 
@@ -1186,6 +1188,22 @@ End
 
 Theorem a64_decode_unimplemented_probes_10_none:
   EVERY (λw. decode armv9_4 w = NONE) a64_decode_unimplemented_probes_10
+Proof
+  EVAL_TAC
+QED
+
+(* Valid architectural encodings intentionally unimplemented by arm64Isa. *)
+Definition a64_decode_unimplemented_probes_11_def:
+  a64_decode_unimplemented_probes_11 = [
+     (0xd8000000w);
+     (0xf9800000w);
+     (0xad800440w);
+     (0x9b220c20w);
+     (0x5e282800w)]
+End
+
+Theorem a64_decode_unimplemented_probes_11_none:
+  EVERY (λw. decode armv9_4 w = NONE) a64_decode_unimplemented_probes_11
 Proof
   EVAL_TAC
 QED

@@ -21,7 +21,7 @@ from typing import Iterable
 
 INVENTORY_VERSION = "a64-el0-v1.2-armv9.4"
 INVENTORY_SOURCE = "Arm DDI 0487 and DDI 0602 A64 instruction descriptions"
-ARCHITECTURAL_TOTAL = 157
+ARCHITECTURAL_TOTAL = 163
 
 
 @dataclass(frozen=True)
@@ -137,16 +137,19 @@ INVENTORY: tuple[Form, ...] = (
     Form("load-store.single-immediate-scaled", "loads/stores", "MemImm", 0x3F800000, 0x39000000, ("B/H/W/X", "scaled unsigned offset"), probe_words=(0x39000000, 0x39400000, 0x79000000, 0x79400000, 0xB9000000, 0xB9400000, 0xF9000000, 0xF9400000)),
     Form("load-store.single-immediate-unscaled", "loads/stores", "MemImm", 0x3FA00000, 0x38000000, ("B/H/W/X", "unscaled/pre/post-index"), probe_words=(0x38000041, 0x38400041, 0x38000C41, 0x38400C41, 0x38001441, 0x38401441, 0x78401441, 0xB8401441, 0xF8401441), field_constraints=((10, 2, (0, 1, 3)),)),
     Form("load-store.single-unprivileged", "loads/stores", "MemImm", 0x3FA00C00, 0x38000800, ("B/H/W/X", "unprivileged"), "valid_but_unimplemented", probe_words=(0x38000820,)),
-    Form("load-store.single-register", "loads/stores", "MemReg", 0x3FA00C00, 0x38200800, ("B/H/W/X", "extend/shift"), probe_words=(0x38204800, 0x78204800, 0xB8204800, 0xF8204800)),
+    Form("load-store.single-register", "loads/stores", "MemReg", 0x3FA00C00, 0x38200800, ("B/H/W/X", "extend/shift", "load/store", "S=0/1"), probe_words=(0x38204800, 0x38606800, 0x3860C800, 0x38605800, 0x3820E800, 0x78204800, 0xB8204800, 0xF8204800), field_constraints=((13, 3, (2, 3, 6, 7)),)),
     Form("load-store.pair", "loads/stores", "MemPair", 0x7E000000, 0x28000000, ("W/X", "offset/pre/post-index"), probe_words=(0x28800440, 0x29400440, 0x29800440, 0x28C00440, 0x29C00440, 0xA8800440), field_constraints=((23, 2, (1, 2, 3)),)),
     Form("load-store.pair-nontemporal", "loads/stores", "MemPair", 0x7F800000, 0x28000000, ("LDNP/STNP",), "valid_but_unimplemented", probe_words=(0xA8000440,)),
     Form("load-store.q-pair-load", "loads/stores", "LdpQ", 0xFFC00000, 0xAD400000, ("Q", "offset"), feature="asimd", probe_words=(0xAD400440,)),
     Form("load-store.q-pair-store", "loads/stores", "StpQ", 0xFFC00000, 0xAD000000, ("Q", "offset"), feature="asimd"),
+    Form("load-store.q-pair-store-pre", "loads/stores", "StpQ", 0xFFC00000, 0xAD800000, ("Q", "pre-index"), "valid_but_unimplemented", "asimd", probe_words=(0xAD800440,)),
     Form("load-store.q-load", "loads/stores", "LdrQ", 0xFFC00000, 0x3DC00000, ("Q", "scaled unsigned offset"), feature="asimd"),
     Form("load-store.q-load-post", "loads/stores", "LdrQ", 0xFFE00C00, 0x3CC00400, ("Q", "post-index"), "implemented", "asimd"),
     Form("load-store.q-load-pre", "loads/stores", "LdrQ", 0xFFE00C00, 0x3CC00C00, ("Q", "pre-index"), "valid_but_unimplemented", "asimd", probe_words=(0x3CC00C00,)),
     Form("load-store.q-store", "loads/stores", "StrQ", 0xFFC00000, 0x3D800000, ("Q", "scaled"), feature="asimd"),
     Form("load-store.literal", "loads/stores", "LdrLiteral", 0xFF000000, 0x18000000, ("LDR literal", "W/X/LDRSW/S/D/Q"), "valid_but_unimplemented", probe_words=(0x18000000, 0x58000000, 0x98000000, 0x1C000000, 0x5C000000, 0x9C000000), encoding_partitions=((0xFF000000, 0x18000000), (0xFF000000, 0x58000000), (0xFF000000, 0x98000000), (0xFF000000, 0x1C000000), (0xFF000000, 0x5C000000), (0xFF000000, 0x9C000000))),
+    Form("load-store.prfm-literal", "loads/stores", "Prfm", 0xFF000000, 0xD8000000, ("PRFM literal",), "valid_but_unimplemented", probe_words=(0xD8000000,)),
+    Form("load-store.prfm-immediate", "loads/stores", "Prfm", 0x3F800000, 0xF9800000, ("PRFM immediate",), "valid_but_unimplemented", probe_words=(0xF9800000,)),
     Form("load-store.exclusive", "loads/stores", "Exclusive", 0x3F20FC00, 0x08007C00, ("LDXR/STXR", "B/H/W/X"), "valid_but_unimplemented"),
     Form("load-store.acquire-release", "loads/stores", "AcquireRelease", 0x3F20FC00, 0x0800FC00, ("LDAXR/STLXR", "B/H/W/X"), "valid_but_unimplemented"),
     Form("load-store.atomic-add", "loads/stores", "Atomic", 0x3F20FC00, 0x38200000, ("LDADD", "B/H/W/X"), "valid_but_unimplemented", probe_words=(0xF8200020, 0xB8200020, 0xB8210062)),
@@ -168,9 +171,11 @@ INVENTORY: tuple[Form, ...] = (
     Form("dp-reg.variable-shift", "data processing register", "VariableShift", 0x7FE0F000, 0x1AC02000, ("LSL/LSR/ASR/ROR", "W/X"), probe_words=(0x1AC02000, 0x1AC02400, 0x1AC02800, 0x1AC02C00, 0x9AC02000, 0x9AC02400, 0x9AC02800, 0x9AC02C00)),
     Form("dp-imm.bitfield", "data processing immediate", "Bitfield", 0x3F800000, 0x13000000, ("SBFM/UBFM", "W/X"), probe_words=(0x13000000, 0x53000000, 0x93400000, 0xD3400000)),
     Form("dp-imm.bitfield-bfm", "data processing immediate", "Bitfield", 0x3F800000, 0x33000000, ("BFM", "W/X"), "valid_but_unimplemented"),
-    Form("dp-imm.extract", "data processing immediate", "Extract", 0x7FA00000, 0x13800000, ("W/X", "#0..#63"), probe_words=(0x13800000, 0x93C00000)),
+    Form("dp-imm.extract.w", "data processing immediate", "Extract", 0xFFA00000, 0x13800000, ("sf=W", "#0..#31"), probe_words=(0x13800000,), field_constraints=((10, 6, tuple(range(32))),)),
+    Form("dp-imm.extract.x", "data processing immediate", "Extract", 0xFFA00000, 0x93C00000, ("sf=X", "#0..#63"), probe_words=(0x93C00000,)),
     Form("dp-reg.conditional-select", "data processing register", "Select", 0x3FE00800, 0x1A800000, ("CSEL/CSINC/CSINV/CSNEG", "W/X"), probe_words=(0x1A800000, 0x1A800400, 0x5A800000, 0x5A800400, 0x9A800000, 0x9A800400, 0xDA800000, 0xDA800400)),
     Form("dp-reg.signed-multiply-long", "data processing register", "SignedMulLong", 0xFFE0FC00, 0x9B207C00, ("SMULL",)),
+    Form("dp-reg.signed-multiply-add-long", "data processing register", "SignedMulLong", 0xFFE0FC00, 0x9B200C00, ("SMADDL",), "valid_but_unimplemented", probe_words=(0x9B220C20,)),
     Form("dp-reg.multiply-add", "data processing register", "MulAdd", 0x7FE00000, 0x1B000000, ("MADD/MSUB", "W/X"), probe_words=(0x1B000000, 0x1B008000, 0x9B000000, 0x9B008000)),
     Form("dp-reg.multiply-high", "data processing register", "MulHigh", 0xFF60FC00, 0x9B407C00, ("SMULH/UMULH",), probe_words=_mul_high_probes()),
     Form("dp-reg.divide", "data processing register", "Divide", 0x7FE0F800, 0x1AC00800, ("UDIV/SDIV", "W/X"), probe_words=(0x1AC00800, 0x1AC00C00, 0x9AC00800, 0x9AC00C00)),
@@ -254,6 +259,7 @@ INVENTORY: tuple[Form, ...] = (
     Form("crypto.sha1m", "AdvSIMD/crypto", "Sha2", 0xFFE0FC00, 0x5E002000, ("SHA1M",), "valid_but_unimplemented", "asimd", probe_words=(0x5E002000,)),
     Form("crypto.sha1su0", "AdvSIMD/crypto", "Sha2", 0xFFE0FC00, 0x5E003000, ("SHA1SU0",), "valid_but_unimplemented", "asimd", probe_words=(0x5E003000,)),
     Form("crypto.sha256h2", "AdvSIMD/crypto", "Sha2", 0xFFE0FC00, 0x5E005000, ("SHA256H2",), "valid_but_unimplemented", "asimd", probe_words=(0x5E005000,)),
+    Form("crypto.sha256su0", "AdvSIMD/crypto", "Sha2", 0xFFE0FC00, 0x5E202800, ("SHA256SU0",), "valid_but_unimplemented", "asimd", probe_words=(0x5E282800,)),
 )
 
 ADD_CONSTRUCTORS = {"AddImm", "AddShift", "AddExtend", "AddCarry"}
@@ -381,6 +387,12 @@ def _fault_test_evidence(root: Path, form: Form) -> bool:
     if not expected_faults:
         return True
     tests = _source(root, "tests/arm64NativeScript.sml")
+    native_sources = _source(root, "tests/arm64NativeCasesScript.sml")
+    generated_asimd = (
+        form.feature in {"asimd", "aes", "pmull", "crc32"}
+        and "_requires_asimd" in tests
+        and any(_case_matches_form(case, form) for case in _native_simd_cases(native_sources).values())
+    )
     names = {
         "load-store.single-immediate-unscaled": {
             "SPAlignment": ("sp_load_rejects_misaligned_base",),
@@ -413,7 +425,8 @@ def _fault_test_evidence(root: Path, form: Form) -> bool:
         },
         "crypto.aes.aese": {"Unsupported": ("aese_requires_aes", "aese_requires_asimd")},
     }.get(form.form_id, {})
-    return bool(names) and all(
+    return all(
+        generated_asimd if fault == "Unsupported" else
         any(_contains_word(tests, name) for name in names.get(fault, ()))
         for fault in expected_faults
     )
@@ -483,6 +496,8 @@ def _source_mask_opcode(form: Form) -> tuple[int, int]:
     mask, opcode = form.mask, form.opcode
     if form.constructor == "SimdShift":
         return 0xFF80FC00, opcode & 0xFF80FC00
+    if form.constructor == "Extract":
+        return 0x7FA00000, 0x13800000
     if any(variant == "sf=W" or variant == "sf=X" for variant in form.variants):
         mask &= ~(1 << 31)
         opcode &= ~(1 << 31)
@@ -594,6 +609,20 @@ def _native_cases(text: str) -> dict[int, str]:
     return cases
 
 
+def _native_simd_cases(text: str) -> dict[int, str]:
+    """Return the native cases covered by the generated ASIMD fault loop."""
+    definition = re.search(
+        r"Definition native_simd_cases_def:.*?=\s*\[(.*?)\]\s*\nEnd",
+        text,
+        re.S,
+    )
+    if not definition:
+        return {}
+    cases = _native_cases(text)
+    indices = [int(index) for index, _ in re.findall(r"\(\s*(\d+)\s*,\s*(\d+)\s*\)", definition.group(1))]
+    return {index: cases[index] for index in indices if index in cases}
+
+
 def _case_matches_form(case: str, form: Form) -> bool:
     if not form.constructor or not _contains_word(case, form.constructor):
         return False
@@ -694,7 +723,7 @@ def _classify_branch_evidence(classify: str, form: Form, source_mask: int, sourc
     return False
 
 
-def _evidence(root: Path, form: Form, isa: str, acceptance_failures: set[str], contract_root: Path | None = None) -> dict[str, object]:
+def _evidence(root: Path, form: Form, isa: str, hol_failures: set[str], contract_root: Path | None = None) -> dict[str, object]:
     encode = _block(isa, "Definition encode_def:")
     classify = _block(isa, "Definition classify_def:") + _block(isa, "Definition classify_simd_def:")
     execute = _block(isa, "Definition execute_with_def:")
@@ -736,14 +765,11 @@ def _evidence(root: Path, form: Form, isa: str, acceptance_failures: set[str], c
         execution = False
         faults_modeled = False
         state_update_modeled = False
-    hidden_for_acceptance = form.form_id in acceptance_failures
-    if hidden_for_acceptance:
-        decode = False
-        execution = False
+    acceptance_failure = form.form_id in hol_failures
     native_sources = _source(root, "tests/arm64NativeCasesScript.sml")
     l3_script = _source(root, "tests/arm64L3Script.sml")
     native_cases = _native_cases(native_sources)
-    native = any(_case_matches_form(case, form) for case in native_cases.values()) and not hidden_for_acceptance
+    native = any(_case_matches_form(case, form) for case in native_cases.values())
     l3_indices = _named_indices(native_sources, "native_l3_cases_def")
     crc_indices = _named_indices(native_sources, "native_crc_cases_def")
     l3_discrepancy_indices = _named_indices(native_sources, "native_l3_clz_zero_def")
@@ -759,7 +785,6 @@ def _evidence(root: Path, form: Form, isa: str, acceptance_failures: set[str], c
         (l3_integer_case and bool(re.search(r'"l3_agrees_"', l3_script)))
         or (l3_crc_case and bool(re.search(r'"l3_crc_agrees_"', l3_script)))
     )
-    l3 = l3 and not hidden_for_acceptance
     l3_discrepancy = any(
         index in l3_discrepancy_indices and _case_matches_form(case, form)
         for index, case in native_cases.items()
@@ -798,22 +823,26 @@ def _evidence(root: Path, form: Form, isa: str, acceptance_failures: set[str], c
         "universal_sources": universal_sources,
         "universal_contract_sources": contract_witnesses,
         "definition_sources": definition_sources,
-        "verified_c_contract": bool(contract_witnesses),
-        "hidden_for_acceptance": hidden_for_acceptance,
+        "contract_witness": bool(contract_witnesses),
+        "contract_witness_sources": contract_witnesses,
+        "verified_c_contract": False,
+        "acceptance_failure": acceptance_failure,
         "feature": form.feature,
     }
 
-def coverage(root: Path, acceptance_failures: set[str] | None = None, contract_root: Path | None = None) -> dict[str, object]:
+def coverage(root: Path, hol_failures: set[str] | None = None, contract_root: Path | None = None) -> dict[str, object]:
     isa = _source(root, "isa/arm64IsaScript.sml")
-    acceptance_failures = acceptance_failures or set()
+    hol_failures = hol_failures or set()
     constructors = _constructors(isa)
     rows: list[dict[str, object]] = []
     for form in INVENTORY:
-        evidence = _evidence(root, form, isa, acceptance_failures, contract_root)
+        evidence = _evidence(root, form, isa, hol_failures, contract_root)
         faults_complete = not evidence["execution_faults"] or (
             evidence["faults_modeled"] and evidence["fault_test_evidence"]
         )
-        if form.architectural_status == "partially_implemented" and evidence["decode"] and evidence["execution"]:
+        if evidence["acceptance_failure"]:
+            status = "partially_implemented"
+        elif form.architectural_status == "partially_implemented" and evidence["decode"] and evidence["execution"]:
             status = "partially_implemented"
         elif evidence["decode"] and evidence["execution"] and faults_complete:
             status = "implemented"
@@ -899,7 +928,7 @@ def _coverage_with_marker(root: Path, form_id: str) -> dict[str, object]:
         hol_ok, hol_message = _hol_acceptance_probe(root, form_id)
         if not hol_ok:
             raise AssertionError(hol_message)
-        return coverage(patched, acceptance_failures={form_id}, contract_root=root)
+        return coverage(patched, hol_failures={form_id}, contract_root=root)
 
 
 _HOL_ACCEPTANCE_CACHE: dict[tuple[str, str], tuple[bool, str]] = {}
@@ -935,7 +964,7 @@ def _hol_acceptance_probe(root: Path, form_id: str) -> tuple[bool, str]:
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            timeout=180,
+            timeout=300,
             check=False,
         )
     output = result.stdout
@@ -1059,7 +1088,7 @@ def validate(root: Path, report: dict[str, object]) -> list[str]:
             memberships = sum((word & mask) == (opcode & mask) for mask, opcode in partitions)
             if memberships != 1:
                 errors.append(f"probe has {memberships} encoding partitions: {row['form_id']} {word_text}")
-        for key in ("decode", "encode_round_trip", "decode_probes", "hol_decode_probe", "hol_decode_negative_probe", "execution", "execution_clause", "hol_execution_probe", "execution_evidence_level", "state_update_modeled", "execution_faults", "faults_modeled", "fault_test_evidence", "step_faults", "native", "l3_arm8", "l3_discrepancy", "l3_discrepancy_sources", "universal", "universal_sources", "universal_contract_sources", "definition_sources", "verified_c_contract", "hidden_for_acceptance"):
+        for key in ("decode", "encode_round_trip", "decode_probes", "hol_decode_probe", "hol_decode_negative_probe", "execution", "execution_clause", "hol_execution_probe", "execution_evidence_level", "state_update_modeled", "execution_faults", "faults_modeled", "fault_test_evidence", "step_faults", "native", "l3_arm8", "l3_discrepancy", "l3_discrepancy_sources", "universal", "universal_sources", "universal_contract_sources", "definition_sources", "contract_witness", "contract_witness_sources", "verified_c_contract", "acceptance_failure"):
             if key not in evidence:
                 errors.append(f"missing evidence field {key}: {row['form_id']}")
         if row["architectural_status"] == "valid_but_unimplemented" and not evidence["hol_decode_negative_probe"]:
@@ -1092,8 +1121,8 @@ def print_report(report: dict[str, object]) -> None:
             f"fault_classes={','.join(e['execution_faults']) or 'none'} "
             f"mask={row['mask']} opcode={row['opcode']}"
         )
-        if e["verified_c_contract"]:
-            print(f"  verified_c_contract={','.join(e['universal_contract_sources'])}")
+        if e["contract_witness"]:
+            print(f"  contract_witness={','.join(e['contract_witness_sources'])}")
 
 
 def main(argv: list[str]) -> int:
