@@ -58,14 +58,14 @@ Definition asl_features_def:
 End
 
 (* The system configuration arm64-hol assumes: Non-secure state, MPAM
-   disabled, the features above, AArch64 at EL0, no alignment
+   disabled, the features above, AArch64 at EL0 on SP_EL0, no alignment
    checking of ordinary accesses, little-endian data, no top-byte ignore,
    not halted in debug state, and no statistical profiling sample in
    flight. *)
 Definition arm64_asl_ok_def:
   arm64_asl_ok (asl:regstate sequential_state) ⇔
     (let p = PSTATE_ref.read_from asl.regstate in
-     p.ProcState_EL = 0w ∧ p.ProcState_nRW = 0w) ∧
+     p.ProcState_EL = 0w ∧ p.ProcState_nRW = 0w ∧ p.ProcState_SP = 0w) ∧
     (let sctlr = (SCTLR_EL1_ref.read_from asl.regstate).SCTLR_EL1_Type_bits in
      ¬word_bit 1 sctlr ∧ ¬word_bit 24 sctlr) ∧
     (let tcr = (TCR_EL1_ref.read_from asl.regstate).TCR_EL1_Type_bits in
