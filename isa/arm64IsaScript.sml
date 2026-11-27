@@ -7,11 +7,15 @@ val () = app (fn n =>
     (fcpLib.index_type (Arbnum.fromInt n)))) [14, 19, 21, 26];
 
 Datatype:
-  arm64_feat = <| asimd : bool; crc32 : bool; aes : bool; pmull : bool |>
+  arm64_feat = <| asimd : bool; crc32 : bool; aes : bool; pmull : bool;
+                  sha1 : bool; sha256 : bool; sha512 : bool; sha3 : bool;
+                  sm3 : bool; sm4 : bool |>
 End
 
 Definition armv9_4_def:
-  armv9_4 = <| asimd := T; crc32 := T; aes := T; pmull := T |>
+  armv9_4 = <| asimd := T; crc32 := T; aes := T; pmull := T;
+               sha1 := T; sha256 := T; sha512 := T; sha3 := T;
+               sm3 := T; sm4 := T |>
 End
 
 Datatype:
@@ -119,12 +123,21 @@ Datatype:
   | MemImm bool word2 word2 word5 word5 mem_immediate
   | MemReg bool word2 word2 word5 word5 word5 word3 bool
   | MemPair bool word2 bool index_mode word5 word5 word5 word7
+  | MemMulti bool bool bool word5 word4 word2 word5 word5
+  | MemLane bool bool bool word5 bool word3 bool word2 word5 word5
   | SimdImm bool bool word4 word8 word5
   | SimdBinary simd_binary word5 word5 word5
   | SimdUnary simd_unary word5 word5
   | Crc32 bool word2 word5 word5 word5
   | Pmull bool word5 word5 word5
   | Aes aes_op word5 word5
+  | ShaThree word3 word5 word5 word5
+  | ShaTwo word5 word5 word5
+  | CryptoFour word2 word5 word5 word5 word5
+  | Sm3Tt word2 word2 word5 word5 word5
+  | CryptoThree bool word2 word5 word5 word5
+  | Xar word5 word5 word5 word6
+  | CryptoTwo word2 word5 word5
   | SimdTable bool word5 word5 word5
   | SimdExtract word5 word5 word5 word4
   | SimdShift simd_shift word5 word5 word7
@@ -226,6 +239,48 @@ Definition pair_ok_def:
     opc ≠ 3w ∧ mode ≠ Unprivileged ∧ ¬(load ∧ t = u) ∧
     (vec ∨ (writeback_ok mode n t ∧ writeback_ok mode n u ∧
             (opc = 1w ⇒ load ∧ mode ≠ NonTemporal)))
+End
+
+(* Multiple-structure transfers (LD1-LD4, ST1-ST4) take q, load, post-index,
+   m, opcode, size, t and n. The opcode gives the number of registers each
+   structure element spans (selem) and how many times the transfer repeats
+   (rpt); one of the two is 1. *)
+Definition multi_layout_def:
+  multi_layout (opc:word4) =
+    if opc = 0w then (1,4) else if opc = 2w then (4,1)
+    else if opc = 4w then (1,3) else if opc = 6w then (3,1)
+    else if opc = 7w then (1,1) else if opc = 8w then (1,2) else (2,1)
+End
+
+Definition multi_ok_def:
+  multi_ok q (opc:word4) (size:word2) ⇔
+    MEM (w2n opc) [0; 2; 4; 6; 7; 8; 10] ∧
+    ¬(size = 3w ∧ ¬q ∧ SND (multi_layout opc) ≠ 1)
+End
+
+(* Single-structure transfers take q, load, post-index, m, R, opcode, S,
+   size, t and n. opcode<2:1> = 3 replicates one element to every lane
+   (LD1R-LD4R); otherwise q:S:size select the lane. *)
+Definition lane_ok_def:
+  lane_ok load (opc:word3) S (size:word2) ⇔
+    let scale = w2n opc DIV 2 in
+      if scale = 3 then load ∧ ¬S
+      else if scale = 1 then ¬word_bit 0 size
+      else if scale = 2 then ¬word_bit 1 size ∧ ¬(word_bit 0 size ∧ S)
+      else T
+End
+
+(* Element size in bytes and lane index of a single-structure transfer. *)
+Definition lane_layout_def:
+  lane_layout q (opc:word3) S (size:word2) =
+    let scale = w2n opc DIV 2;
+        qs = (if q then 2 else 0) + (if S then 1 else 0)
+    in
+      if scale = 3 then (2 ** w2n size, 0)
+      else if scale = 0 then (1, qs * 4 + w2n size)
+      else if scale = 1 then (2, qs * 2 + w2n size DIV 2)
+      else if word_bit 0 size then (8, if q then 1 else 0)
+      else (4, qs)
 End
 
 (* AND, ORR, EOR and ANDS (immediate) and the bitfield moves describe their
@@ -335,6 +390,27 @@ Definition classify_simd_def:
       else if feat.aes ∧ unary = aes_base Aesd then SOME (Aes Aesd d n)
       else if feat.aes ∧ unary = aes_base Aesmc then SOME (Aes Aesmc d n)
       else if feat.aes ∧ unary = aes_base Aesimc then SOME (Aes Aesimc d n)
+      else if w && 0xffe08c00w = 0x5e000000w ∧
+              (if word_bit 14 w then feat.sha256 else feat.sha1) then
+        SOME (ShaThree (w2w (w >>> 12)) d n m)
+      else if w && 0xfffe0c00w = 0x5e280800w ∧
+              (if word_bit 13 w then feat.sha256 else feat.sha1) then
+        SOME (ShaTwo (w2w (w >>> 12)) d n)
+      else if w && 0xff808000w = 0xce000000w ∧
+              (if word_bit 22 w then feat.sm3 else feat.sha3) then
+        SOME (CryptoFour (w2w (w >>> 21)) d n m (w2w (w >>> 10)))
+      else if feat.sm3 ∧ w && 0xffe0c000w = 0xce408000w then
+        SOME (Sm3Tt (w2w (w >>> 10)) (w2w (w >>> 12)) d n m)
+      else if w && 0xffe0b000w = 0xce608000w ∧
+              (if word_bit 14 w then
+                 if word_bit 11 w then feat.sm4 else feat.sm3
+               else if w && 0xc00w = 0xc00w then feat.sha3 else feat.sha512) then
+        SOME (CryptoThree (word_bit 14 w) (w2w (w >>> 10)) d n m)
+      else if feat.sha3 ∧ w && 0xffe00000w = 0xce800000w then
+        SOME (Xar d n m (w2w (w >>> 10)))
+      else if w && 0xfffff000w = 0xcec08000w ∧
+              (if word_bit 10 w then feat.sm4 else feat.sha512) then
+        SOME (CryptoTwo (w2w (w >>> 10)) d n)
       else if binary = 0x4e000000w then SOME (SimdTable F d n m)
       else if binary = 0x4e001000w then SOME (SimdTable T d n m)
       else if w && 0xffe08400w = 0x6e000000w then
@@ -476,6 +552,19 @@ Definition encode_def:
        SOME (pair_encoding (0x28000000w || insert_field 30 opc || flag_field vec 26 ||
                             pair_mode_bits mode || flag_field load 22) t u n imm)
      else NONE) ∧
+  encode (MemMulti q load post m opc size t n) =
+    (if multi_ok q opc size ∧ (post ∨ m = 0w) then
+       SOME (0x0c000000w || flag_field q 30 || flag_field post 23 ||
+             flag_field load 22 || insert_field 16 m || insert_field 12 opc ||
+             insert_field 10 size || reg_fields t n 0w)
+     else NONE) ∧
+  encode (MemLane q load post m r opc S size t n) =
+    (if lane_ok load opc S size ∧ (post ∨ m = 0w) then
+       SOME (0x0d000000w || flag_field q 30 || flag_field post 23 ||
+             flag_field load 22 || flag_field r 21 || insert_field 16 m ||
+             insert_field 13 opc || flag_field S 12 || insert_field 10 size ||
+             reg_fields t n 0w)
+     else NONE) ∧
   encode (SimdImm q op cmode imm d) =
     (if op ∧ cmode = 15w ∧ ¬q then NONE
      else SOME (0x0f000400w || flag_field q 30 || flag_field op 29 ||
@@ -491,6 +580,28 @@ Definition encode_def:
   encode (Pmull high d n m) =
     SOME (0x0ee0e000w || flag_field high 30 || reg_fields d n m) ∧
   encode (Aes op d n) = SOME (aes_base op || reg_fields d n 0w) ∧
+  encode (ShaThree opc d n m) =
+    (if w2n opc < 7 then SOME (0x5e000000w || insert_field 12 opc || reg_fields d n m)
+     else NONE) ∧
+  encode (ShaTwo opc d n) =
+    (if w2n opc < 3 then SOME (0x5e280800w || insert_field 12 opc || reg_fields d n 0w)
+     else NONE) ∧
+  encode (CryptoFour op0 d n m a) =
+    (if op0 = 3w then NONE
+     else SOME (0xce000000w || insert_field 21 op0 || insert_field 10 a ||
+                reg_fields d n m)) ∧
+  encode (Sm3Tt opc imm2 d n m) =
+    SOME (0xce408000w || insert_field 12 imm2 || insert_field 10 opc ||
+          reg_fields d n m) ∧
+  encode (CryptoThree sm opc d n m) =
+    (if sm ∧ opc = 3w then NONE
+     else SOME (0xce608000w || flag_field sm 14 || insert_field 10 opc ||
+                reg_fields d n m)) ∧
+  encode (Xar d n m imm) =
+    SOME (0xce800000w || insert_field 10 imm || reg_fields d n m) ∧
+  encode (CryptoTwo opc d n) =
+    (if w2n opc < 2 then SOME (0xcec08000w || insert_field 10 opc || reg_fields d n 0w)
+     else NONE) ∧
   encode (SimdTable extend d n m) =
     SOME (0x4e000000w || flag_field extend 12 || reg_fields d n m) ∧
   encode (SimdExtract d n m imm) =
@@ -579,6 +690,11 @@ Definition classify_def:
       else if w && 0x1f000000w = 0x10000000w then
         SOME (PcAddress sf d ((w2w disp : word21) << 2 || w2w (w2w (w >>> 29) : word2)))
       else if vec ∧ ¬feat.asimd ∧ w && 0x0a000000w = 0x08000000w then NONE
+      else if w && 0xbf200000w = 0x0c000000w then
+        SOME (MemMulti sub load (word_bit 23 w) m (w2w (w >>> 12)) (w2w (w >>> 10)) d n)
+      else if w && 0xbf000000w = 0x0d000000w then
+        SOME (MemLane sub load (word_bit 23 w) m (word_bit 21 w) (w2w (w >>> 13))
+                (word_bit 12 w) (w2w (w >>> 10)) d n)
       else if w && 0x3b000000w = 0x18000000w then
         SOME (LoadLiteral vec size d disp)
       else if w && 0x3b000000w = 0x39000000w then
@@ -845,6 +961,110 @@ Definition execute_pair_def:
         Next (finish_mem ops mode n base offset
           (write_bytes ops bytes b (stored_value ops vec u s)
             (write_bytes ops bytes a (stored_value ops vec t s) s)))
+      else Fault Store
+End
+
+(* elems elements of the given byte width, stride bytes apart from a; element 0
+   occupies the least significant bits. A stride of zero replicates one
+   element. *)
+Definition gather_def:
+  gather ops 0 bytes stride s (a:word64) = (0w:word128) ∧
+  gather ops (SUC elems) bytes stride s a =
+    read_bytes ops bytes s a ||
+    (gather ops elems bytes stride s (a + n2w stride) << (8 * bytes))
+End
+
+Definition scatter_def:
+  scatter ops 0 bytes stride (a:word64) (v:word128) s = s ∧
+  scatter ops (SUC elems) bytes stride a v s =
+    scatter ops elems bytes stride (a + n2w stride) (v >>> (8 * bytes))
+      (write_bytes ops bytes a v s)
+End
+
+(* Load registers t, ..., t + k - 1, the j-th from elems elements starting
+   j * gap bytes past a. Writing a 64-bit arrangement clears the upper half. *)
+Definition load_vectors_def:
+  load_vectors ops 0 t gap elems bytes stride (a:word64) s = s ∧
+  load_vectors ops (SUC k) t gap elems bytes stride a s =
+    load_vectors ops k t gap elems bytes stride a
+      (s with vregs := ops.put_vec (t + n2w k)
+         (gather ops elems bytes stride s (a + n2w (k * gap))) s.vregs)
+End
+
+Definition store_vectors_def:
+  store_vectors ops 0 t gap elems bytes stride shift (a:word64) s = s ∧
+  store_vectors ops (SUC k) t gap elems bytes stride shift a s =
+    store_vectors ops k t gap elems bytes stride shift a
+      (scatter ops elems bytes stride (a + n2w (k * gap))
+         (ops.get_vec s.vregs (t + n2w k) >>> shift) s)
+End
+
+(* Replace lane index of registers t, ..., t + k - 1 with consecutive
+   elements from a. *)
+Definition load_lanes_def:
+  load_lanes ops 0 t bytes index (a:word64) s = s ∧
+  load_lanes ops (SUC k) t bytes index a s =
+    let shift = 8 * bytes * index;
+        mask : word128 = ((1w << (8 * bytes)) - 1w) << shift;
+        r = t + n2w k
+    in load_lanes ops k t bytes index a
+         (s with vregs := ops.put_vec r
+            ((ops.get_vec s.vregs r && ¬mask) ||
+             (read_bytes ops bytes s (a + n2w (k * bytes)) << shift)) s.vregs)
+End
+
+(* Post-index register 31 adds the transfer size. *)
+Definition structure_offset_def:
+  structure_offset ops s (m:word5) total : word64 =
+    if m = 31w then n2w total else gpr ops s m
+End
+
+Definition execute_multi_def:
+  execute_multi (ops:('g,'m,'p,'v) arm64_storage) q load post m opc (size:word2) t n
+      (s:('g,'m,'p,'v) arm64_machine) =
+    let (rpt,selem) = multi_layout opc;
+        bytes = 2 ** w2n size;
+        elems = (if q then 16 else 8) DIV bytes;
+        total = rpt * selem * elems * bytes;
+        gap = if selem = 1 then elems * bytes else bytes;
+        stride = selem * bytes;
+        base = base_reg ops s n;
+        mode = if post then PostIndex else Offset;
+        offset = structure_offset ops s m total
+    in
+      if ¬check_sp n base then Fault SPAlignment
+      else if load then
+        if access_ok ops Read total s base then
+          Next (finish_mem ops mode n base offset
+            (load_vectors ops (rpt * selem) t gap elems bytes stride base s))
+        else Fault Load
+      else if access_ok ops Write total s base then
+        Next (finish_mem ops mode n base offset
+          (store_vectors ops (rpt * selem) t gap elems bytes stride 0 base s))
+      else Fault Store
+End
+
+Definition execute_lane_def:
+  execute_lane (ops:('g,'m,'p,'v) arm64_storage) q load post m r (opc:word3) S size t n
+      (s:('g,'m,'p,'v) arm64_machine) =
+    let (bytes,index) = lane_layout q opc S size;
+        selem = 2 * (w2n opc MOD 2) + (if r then 2 else 1);
+        total = selem * bytes;
+        base = base_reg ops s n;
+        mode = if post then PostIndex else Offset;
+        offset = structure_offset ops s m total
+    in
+      if ¬check_sp n base then Fault SPAlignment
+      else if load then
+        if access_ok ops Read total s base then
+          Next (finish_mem ops mode n base offset
+            (if w2n opc DIV 2 = 3 then
+               load_vectors ops selem t bytes ((if q then 16 else 8) DIV bytes) bytes 0 base s
+             else load_lanes ops selem t bytes index base s))
+        else Fault Load
+      else if access_ok ops Write total s base then
+        Next (finish_mem ops mode n base offset
+          (store_vectors ops selem t bytes 1 bytes 0 (8 * bytes * index) base s))
       else Fault Store
 End
 
@@ -1161,6 +1381,10 @@ Definition execute_with_def:
       (extend_reg ext (gpr ops s m) << (if scaled then transfer_scale vec opc size else 0)) s ∧
   execute_with ops (MemPair vec opc load mode t u n imm) s =
     execute_pair ops vec opc load mode t u n imm s ∧
+  execute_with ops (MemMulti q load post m opc size t n) s =
+    execute_multi ops q load post m opc size t n s ∧
+  execute_with ops (MemLane q load post m r opc S size t n) s =
+    execute_lane ops q load post m r opc S size t n s ∧
   execute_with ops (SimdImm q op cmode imm d) s =
     Next (advance (s with vregs := ops.put_vec d
       (simd_imm_value q op cmode imm (ops.get_vec s.vregs d)) s.vregs)) ∧
@@ -1179,6 +1403,27 @@ Definition execute_with_def:
   execute_with ops (Aes op d n) s =
     Next (advance (s with vregs := ops.put_vec d
       (aes_value op (ops.get_vec s.vregs d) (ops.get_vec s.vregs n)) s.vregs)) ∧
+  execute_with ops (ShaThree opc d n m) s =
+    Next (advance (s with vregs := ops.put_vec d
+      (sha_three_value opc (ops.get_vec s.vregs d) (ops.get_vec s.vregs n) (ops.get_vec s.vregs m)) s.vregs)) ∧
+  execute_with ops (ShaTwo opc d n) s =
+    Next (advance (s with vregs := ops.put_vec d
+      (sha_two_value opc (ops.get_vec s.vregs d) (ops.get_vec s.vregs n)) s.vregs)) ∧
+  execute_with ops (CryptoFour op0 d n m a) s =
+    Next (advance (s with vregs := ops.put_vec d
+      (crypto_four_value op0 (ops.get_vec s.vregs n) (ops.get_vec s.vregs m) (ops.get_vec s.vregs a)) s.vregs)) ∧
+  execute_with ops (Sm3Tt opc imm d n m) s =
+    Next (advance (s with vregs := ops.put_vec d
+      (sm3_tt opc (w2n imm) (ops.get_vec s.vregs d) (ops.get_vec s.vregs n) (ops.get_vec s.vregs m)) s.vregs)) ∧
+  execute_with ops (CryptoThree sm opc d n m) s =
+    Next (advance (s with vregs := ops.put_vec d
+      (crypto_three_value sm opc (ops.get_vec s.vregs d) (ops.get_vec s.vregs n) (ops.get_vec s.vregs m)) s.vregs)) ∧
+  execute_with ops (Xar d n m imm) s =
+    Next (advance (s with vregs := ops.put_vec d
+      (xar_value (ops.get_vec s.vregs n) (ops.get_vec s.vregs m) (w2n imm)) s.vregs)) ∧
+  execute_with ops (CryptoTwo opc d n) s =
+    Next (advance (s with vregs := ops.put_vec d
+      (crypto_two_value opc (ops.get_vec s.vregs d) (ops.get_vec s.vregs n)) s.vregs)) ∧
   execute_with ops (SimdTable extend d n m) s =
     Next (advance (s with vregs := ops.put_vec d
       (simd_table 16 (ops.get_vec s.vregs n) (ops.get_vec s.vregs m)

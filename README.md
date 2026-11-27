@@ -11,9 +11,11 @@ address translation.
 one-instruction execution. It covers the base A64 integer and branch
 instructions other than pointer authentication, all general-register
 loads, stores and prefetches outside the atomic, exclusive and ordered
-classes, SIMD&FP single-register, pair and literal loads and stores,
-AdvSIMD modified-immediate moves, and selected AdvSIMD, CRC-32, CRC-32C,
-polynomial multiply and AES instructions. The model gates optional instruction
+classes, SIMD&FP single-register, pair, literal and structure (`LD1`–`LD4`,
+`ST1`–`ST4`, single-lane and replicate) loads and stores, AdvSIMD
+modified-immediate moves, the AES, SHA-1, SHA-256, SHA-512, SHA-3, SM3 and
+SM4 instructions, and selected AdvSIMD, CRC-32, CRC-32C and polynomial
+multiply instructions. The model gates optional instruction
 families by feature and faults on unsupported encodings. Fetches require
 readable, executable, non-writable bytes. Stores require readable,
 writable, non-executable bytes. SP-based transfers also require 16-byte
@@ -31,7 +33,8 @@ With Poly/ML and holbuild on PATH:
 holbuild buildhol
 holbuild -j4 build arm64HolTheory
 holbuild check arm64CryptoTheory arm64IsaTheory arm64IsaCvTheory \
-  arm64NativeCasesTheory arm64NativeTheory arm64L3Theory arm64HolTheory
+  arm64CryptoVectorsTheory arm64NativeCasesTheory arm64NativeTheory \
+  arm64L3Theory arm64HolTheory
 ```
 
 ## Conformance
@@ -48,9 +51,12 @@ holbuild check arm64CryptoTheory arm64IsaTheory arm64IsaCvTheory \
   zero-input `CLZ` discrepancy observed against native behavior.
 - `arm64Crypto` proves equivalence of the modeled AES round operations
   with the corresponding components of HOL4's AES reference implementation.
+- `arm64CryptoVectors` computes the GB/T 32907 SM4 and GB/T 32905 SM3
+  examples by stepping assembled SM4 and SM3 instructions, which the native
+  hosts cannot execute.
 
-To reproduce the hardware observations, run on AArch64 with CRC32, PMULL
-and AES support. The generator requires GCC, GNU binutils, Python 3, and
+To reproduce the hardware observations, run on AArch64 with CRC32, PMULL,
+AES, SHA-1, SHA-256, SHA-512 and SHA-3 support. The generator requires GCC, GNU binutils, Python 3, and
 rustup's `llvm-tools` component.
 
 ```sh

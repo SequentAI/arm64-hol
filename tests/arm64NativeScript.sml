@@ -28,10 +28,23 @@ Definition read_window_def:
     lookup_default default tree base :: read_window default n (base + 1) tree
 End
 
+(* The observed vector registers start at vbase and wrap from V31 to V0. *)
+Definition put_vectors_def:
+  put_vectors base [] tree = tree ∧
+  put_vectors base (value::values) tree =
+    put_vectors ((base + 1) MOD 32) values (insert base value tree)
+End
+
+Definition read_vectors_def:
+  read_vectors 0 base tree = [] ∧
+  read_vectors (SUC n) base tree =
+    lookup_default 0w tree base :: read_vectors n ((base + 1) MOD 32) tree
+End
+
 Definition test_state_at_def:
   test_state_at vbase w (pc,sp,flags,link,regs,vectors,data) : finite_state =
     let gpr = insert 30 link (put_many 0 regs LN);
-        vec = put_many vbase vectors LN;
+        vec = put_vectors vbase vectors LN;
         code = put_many 208 literal_pool (put_many 268 literal_pool
           (put_many 256 [byte_at w 0; byte_at w 1; byte_at w 2; byte_at w 3] LN));
         mem = put_many 4096 data code;
@@ -50,7 +63,7 @@ Definition observe_at_def:
   observe_at vbase (s:finite_state) : observation =
     (s.pc, s.sp, bits_of_nzcv s.nzcv, lookup_word 0w s.regs (30w:word5),
      read_window 0w 4 0 s.regs,
-     read_window 0w 2 vbase s.vregs,
+     read_vectors 4 vbase s.vregs,
      read_window 0w 64 4096 s.mem)
 End
 
@@ -221,6 +234,23 @@ val () = check_fault "q_store_rejects_unwritable_last_byte" enabled
   ``^q_store with perms := insert 4111 (perm T F F) (^q_store).perms`` ``Store``;
 val () = check_fault "q_store_checks_sp_before_access" enabled
   ``test_state 0x3d8003e0w ^initial with sp := 4097w`` ``SPAlignment``;
+(* Structure transfers check every byte and SP alignment before any access. *)
+val multi_load = ``test_state 0x4c40a000w ^initial``;
+val () = check_fault "multi_load_rejects_unreadable_last_byte" enabled
+  ``^multi_load with perms := insert 4127 (perm F F F) (^multi_load).perms`` ``Load``;
+val multi_store = ``test_state 0x4c00a000w ^initial``;
+val () = check_fault "multi_store_rejects_unwritable_last_byte" enabled
+  ``^multi_store with perms := insert 4127 (perm T F F) (^multi_store).perms`` ``Store``;
+val lane_load = ``test_state 0x4d60a400w ^initial``;
+val () = check_fault "lane_load_rejects_unreadable_last_byte" enabled
+  ``^lane_load with perms := insert 4127 (perm F F F) (^lane_load).perms`` ``Load``;
+val lane_store = ``test_state 0x0d20b000w ^initial``;
+val () = check_fault "lane_store_rejects_unwritable_last_byte" enabled
+  ``^lane_store with perms := insert 4111 (perm T F F) (^lane_store).perms`` ``Store``;
+val () = check_fault "multi_load_checks_sp_before_access" enabled
+  ``test_state 0x4c4073e0w ^initial with sp := 4097w`` ``SPAlignment``;
+val () = check_fault "lane_store_checks_sp_before_access" enabled
+  ``test_state 0x0d0003e0w ^initial with sp := 4097w`` ``SPAlignment``;
 val () = check_fault "umulh_rejects_reserved_accumulator" enabled
   ``test_state 0x9bc07800w ^initial`` ``Unsupported``;
 val () = app (fn (index, _) =>

@@ -30,7 +30,8 @@ jobs:
           holbuild buildhol
           holbuild -j"$(nproc)" build --skip-proof-steps arm64HolTheory
           holbuild check arm64CryptoTheory arm64IsaTheory arm64IsaCvTheory \
-            arm64NativeCasesTheory arm64NativeTheory arm64L3Theory arm64HolTheory
+            arm64CryptoVectorsTheory arm64NativeCasesTheory arm64NativeTheory arm64L3Theory \
+            arm64HolTheory
 
   native:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
