@@ -912,7 +912,7 @@ ADD_OPTIONS = {
 }
 
 
-def add_probes(clauses: list[Clause], by_group, interp: Interp) -> dict[tuple[str, int], list[int]]:
+def add_probes(clauses: list[Clause], by_group, interp: Interp) -> dict[tuple[str, int], list[tuple[int, Clause]]]:
     """Use the Sail ADD/SUB clauses to exercise each width and option field."""
     probes = defaultdict(list)
     prefix = "integer_arithmetic_add_sub_"
@@ -926,12 +926,15 @@ def add_probes(clauses: list[Clause], by_group, interp: Interp) -> dict[tuple[st
                 amounts = (0, 1, 31, 32, 63) if sf else (0, 1, 31)
                 options = tuple((shift << 22) | (amount << 10)
                                 for shift in range(3) for amount in amounts)
-            for fields in options:
+            # Include nonzero operands and Rd = 31 as well as all-zero registers.
+            operands = (1 << 10) if form == "immediate" else (3 << 16)
+            operands |= (2 << 5) | 31
+            for fields in (*options, options[0] | operands):
                 word = clause.value | (sf << 31) | fields
                 status, owner = sail_decode(word, clauses, by_group, interp)
                 if status != "valid" or owner != clause:
                     raise SystemExit(f"Sail rejected ADD probe {word:08x}: {status}")
-                probes[form, sf].append(word)
+                probes[form, sf].append((word, owner))
     if set(probes) != {(form, sf) for form in ADD_OPTIONS for sf in (0, 1)}:
         raise SystemExit("Sail inventory is missing an ADD width or form")
     return dict(probes)
@@ -943,7 +946,7 @@ def decode_state(valid: int, hit: int) -> str:
 
 
 def coverage_report(repo: Path, clauses: list[Clause], rows, probes):
-    words = sorted({w for w, *_ in rows} | {w for cases in probes.values() for w in cases})
+    words = sorted({w for w, *_ in rows})
     decoded = dict(zip(words, hol_decodes(words, repo), strict=True))
     per_clause = defaultdict(Counter)
     mismatches = []
@@ -969,7 +972,7 @@ def coverage_report(repo: Path, clauses: list[Clause], rows, probes):
                        "unknown": counts[("unknown", True)] + counts[("unknown", False)]})
     add_widths = []
     for (form, sf), cases in sorted(probes.items()):
-        hit = sum(decoded[word] for word in cases)
+        hit = sum(decoded[word] for word, _ in cases)
         add_widths.append({"form": form, "width": 64 if sf else 32,
                            "state": decode_state(len(cases), hit),
                            "valid": len(cases), "decoded": hit})
@@ -1005,6 +1008,13 @@ def check_add(repo: Path, clauses: list[Clause], rows, probes, report, add_width
     clause_ids = [row["clause"] for row in report]
     if len(clause_ids) != len(clauses) or [row["clause"] for row in mutant_report] != clause_ids:
         raise SystemExit("The ADD mutation changed the Sail coverage denominator")
+    immediate_clauses = {clause.index for _, clause in probes["immediate", 0]}
+    for original, mutant in zip(report, mutant_report, strict=True):
+        if original["clause"] in immediate_clauses:
+            if original["state"] != "covered" or mutant["state"] != "partial":
+                raise SystemExit(f"Expected the {original['mnemonic']} clause to become partial")
+        elif original["state"] != mutant["state"]:
+            raise SystemExit(f"Unexpected coverage change for {original['mnemonic']}")
     expected = baseline | {target: "missing"}
     if by_width(mutant_widths) != expected:
         raise SystemExit(f"Expected only the W immediate ADD row missing, got {mutant_widths}")
@@ -1046,15 +1056,18 @@ def main() -> None:
             status, owner = sail_decode(word, clauses, by_group, interp)
             rows.append((word, clause, status, owner))
     # CAS W0, W1, [X2] is valid at EL0. The model omits atomic accesses.
-    missing_clause = None
-    if args.accept_add:
-        word = 0x88A07C41
-        status, missing_clause = sail_decode(word, clauses, by_group, interp)
-        if status != "valid" or missing_clause.mnemonic != "cas":
-            raise SystemExit(f"Expected Sail to decode {word:08x} as valid CAS, got {status}")
-        rows.append((word, missing_clause, status, missing_clause))
-    repo = Path(__file__).resolve().parent.parent
+    cas_word = 0x88A07C41
+    status, cas_clause = sail_decode(cas_word, clauses, by_group, interp)
+    if status != "valid" or cas_clause.mnemonic != "cas":
+        raise SystemExit(f"Expected Sail to decode {cas_word:08x} as valid CAS, got {status}")
     probes = add_probes(clauses, by_group, interp)
+    witnesses = [(cas_word, cas_clause)] + [case for cases in probes.values() for case in cases]
+    sampled_words = {word for word, *_ in rows}
+    for word, owner in witnesses:
+        if word not in sampled_words:
+            rows.append((word, owner, "valid", owner))
+            sampled_words.add(word)
+    repo = Path(__file__).resolve().parent.parent
     report, add_widths, mismatches = coverage_report(repo, clauses, rows, probes)
 
     totals = defaultdict(Counter)
@@ -1102,7 +1115,7 @@ def main() -> None:
     if args.accept_add:
         if mismatches:
             raise SystemExit("HOL4 accepted a sampled encoding rejected by Sail")
-        if not any(row["clause"] == missing_clause.index and row["state"] == "missing"
+        if not any(row["clause"] == cas_clause.index and row["state"] == "missing"
                    for row in report):
             raise SystemExit("Expected the valid CAS clause to have state missing")
         check_add(repo, clauses, rows, probes, report, add_widths)

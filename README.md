@@ -86,13 +86,15 @@ matching check for that clause. These observations cover individual
 states, and `step_cv_refines` relates the executable evaluator to the
 HOL model for all states.
 
-CI samples the two extremes of each clause's operand fields and runs the
-ADD regression test. The report gives separate width rows for each ADD
-form, with probes for the flag-setting and subtract variants, immediate
-shifts, register shifts and extensions. The test rebuilds the decoder in
-a temporary copy with 32-bit ADD immediate disabled and reruns the report.
-It checks that precisely that ADD row loses coverage, that the clause
-inventory stays fixed, and that valid EL0 CAS is explicitly missing.
+CI samples the two extremes of each clause's operand fields and includes
+targeted ADD and CAS probes. The report gives separate width rows for
+each ADD form and counts the probes in the corresponding Sail clauses.
+The ADD probes include flag-setting and subtract variants, immediate
+shifts, register shifts and extensions. The regression test rebuilds
+the decoder in a temporary copy with 32-bit ADD immediate disabled and
+reruns the report. It checks that precisely that ADD row becomes missing,
+the corresponding Sail clauses become partial, the clause inventory
+stays fixed, and valid EL0 CAS is explicitly missing.
 
 ```sh
 python3 tools/a64_coverage.py --samples 0 --json a64-coverage.json --accept-add
