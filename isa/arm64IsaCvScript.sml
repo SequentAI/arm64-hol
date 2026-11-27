@@ -1,5 +1,6 @@
 Theory arm64IsaCv
-Ancestors arm64Isa arm64Crypto RoundOp Mult tables cv_std sptree words
+Ancestors arm64Isa arm64Simd arm64Crypto RoundOp Mult tables cv_std sptree words
+  integer_word
 Libs cv_transLib wordsLib
 
 Type finite_state = ``:(word64 spt, word8 spt, perm spt, word128 spt) arm64_machine``
@@ -493,6 +494,15 @@ val () = app (cv_auto_trans o REWRITE_RULE [mult_unroll]) [MultCol_def, InvMultC
 val () = app (fn def => translate_aes_map def genMixColumns_def) [MixColumns_def, InvMixColumns_def];
 val () = app cv_auto_trans [aes_value_def, crc32_bit_def, crc32_bits_def,
                             crc32_value_def, clmul_def, pmull_value_def];
+
+val () = cv_auto_trans (INST_TYPE [alpha |-> ``:64``] integer_wordTheory.i2w_def);
+val int_shr_pre_def = cv_auto_trans_pre "int_shr_pre" int_shr_def;
+
+Theorem int_shr_pre[cv_pre]:
+  int_shr_pre v n
+Proof
+  simp[int_shr_pre_def]
+QED
 
 val () = cv_auto_trans encode_def;
 val () = cv_auto_trans decode_def;
