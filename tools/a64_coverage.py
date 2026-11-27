@@ -1017,7 +1017,7 @@ def check_add(repo: Path, clauses: list[Clause], rows, probes, report, add_width
         if original["clause"] in immediate_clauses:
             if original["state"] != "covered" or mutant["state"] != "partial":
                 raise SystemExit(f"Expected the {original['mnemonic']} clause to become partial")
-        elif original["state"] != mutant["state"]:
+        elif original["decoded"] != mutant["decoded"] or original["state"] != mutant["state"]:
             raise SystemExit(f"Unexpected coverage change for {original['mnemonic']}")
     expected = baseline | {target: "missing"}
     if by_width(mutant_widths) != expected:
