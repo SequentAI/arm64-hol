@@ -9,8 +9,10 @@ theories to build them, e.g. `holbuild build armv9_p32Theory`.
 - `model/` is the generated specification: the A64 instruction set without
   A32, SVE, SME or devices, with flat identity memory (no address
   translation) and each UNKNOWN value a fixed unspecified value (HOL's
-  `ARB`). It is split into the theories `armv9_p1` to `armv9_p32`, each
-  extending the ones before it.
+  `ARB`), and `ConstrainUnpredictable` making the choices of Arm's
+  Armv9.3-A specification. It is split into the theories `armv9_p1` to
+  `armv9_p32`; each opens only the earlier parts it uses, so independent
+  parts build in parallel.
 - `lib/` holds the Lem and Sail support libraries the model needs.
 - `gen/generate.sh` regenerates `model/`; its header says how.
 
