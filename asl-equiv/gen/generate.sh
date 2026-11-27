@@ -16,7 +16,9 @@
 #  3. lem -hol each part against declaration-only stand-ins of the others,
 #     twice: the first pass finds the names Lem gives each constant in HOL,
 #     the second uses them in the stand-ins.
-#  4. Adapt the output to the pinned HOL (fix-hol.sh) and copy it to model/.
+#  4. Adapt the output to the pinned HOL and give ConstrainUnpredictable
+#     Arm's choices (fix-hol.sh), open in each part only the parts it uses
+#     (split/trim_opens.py), and copy it to model/.
 set -euo pipefail
 spec=$(realpath "$1"); work=$(realpath -m "$2"); here=$(dirname "$(realpath "$0")")
 share=$(dirname "$(dirname "$(command -v sail)")")/share/sail
@@ -73,4 +75,5 @@ cmp names.json names2.json
 cp hol/*Script.sml "$model/"
 cp hol-lib/*Script.sml "$here/../lib/sail/"
 bash "$here/fix-hol.sh" "$model"/*Script.sml "$here"/../lib/sail/sail2_{concurrency_interface,monadic_combinators,undefined_concurrency_interface}Script.sml
+python3 "$here/split/trim_opens.py" "$model"
 sed -i '/^val _ = new_theory "armv9_/a val _ = HOLFlags.set_trace "TheoryPP.include_html_docs" 0;' "$model"/armv9_*Script.sml
