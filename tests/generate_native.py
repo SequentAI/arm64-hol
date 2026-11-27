@@ -475,24 +475,138 @@ CRYPTO_SIMD_PROBES = [
     ("aesd", "Aes Aesd 30w 31w", "aesd v30.16b,v31.16b", -1, (), 30),
     ("aesmc", "Aes Aesmc 31w 30w", "aesmc v31.16b,v30.16b", -1, (), 30),
     ("aesimc", "Aes Aesimc 30w 31w", "aesimc v30.16b,v31.16b", -1, (), 30),
+    ("sha1c", "ShaThree 0w 28w 29w 30w", "sha1c q28,s29,v30.4s", -1, (), 28),
+    ("sha1p", "ShaThree 1w 28w 29w 30w", "sha1p q28,s29,v30.4s", -1, (), 28),
+    ("sha1m", "ShaThree 2w 28w 29w 30w", "sha1m q28,s29,v30.4s", -1, (), 28),
+    ("sha1su0", "ShaThree 3w 28w 29w 30w", "sha1su0 v28.4s,v29.4s,v30.4s", -1, (), 28),
+    ("sha256h", "ShaThree 4w 28w 29w 30w", "sha256h q28,q29,v30.4s", -1, (), 28),
+    ("sha256h2", "ShaThree 5w 28w 29w 30w", "sha256h2 q28,q29,v30.4s", -1, (), 28),
+    ("sha256su1", "ShaThree 6w 28w 29w 30w", "sha256su1 v28.4s,v29.4s,v30.4s", -1, (), 28),
+    ("sha1h", "ShaTwo 0w 28w 29w", "sha1h s28,s29", -1, (), 28),
+    ("sha1su1", "ShaTwo 1w 28w 29w", "sha1su1 v28.4s,v29.4s", -1, (), 28),
+    ("sha256su0", "ShaTwo 2w 28w 29w", "sha256su0 v28.4s,v29.4s", -1, (), 28),
+    ("sha512h", "CryptoThree F 0w 28w 29w 30w", "sha512h q28,q29,v30.2d", -1, (), 28),
+    ("sha512h2", "CryptoThree F 1w 28w 29w 30w", "sha512h2 q28,q29,v30.2d", -1, (), 28),
+    ("sha512su1", "CryptoThree F 2w 28w 29w 30w", "sha512su1 v28.2d,v29.2d,v30.2d", -1, (), 28),
+    ("rax1", "CryptoThree F 3w 28w 29w 30w", "rax1 v28.2d,v29.2d,v30.2d", -1, (), 28),
+    ("sha512su0", "CryptoTwo 0w 28w 29w", "sha512su0 v28.2d,v29.2d", -1, (), 28),
+    ("eor3", "CryptoFour 0w 28w 29w 30w 31w", "eor3 v28.16b,v29.16b,v30.16b,v31.16b", -1, (), 28),
+    ("bcax", "CryptoFour 1w 28w 29w 30w 31w", "bcax v28.16b,v29.16b,v30.16b,v31.16b", -1, (), 28),
+    ("xar_0", "Xar 28w 29w 30w 0w", "xar v28.2d,v29.2d,v30.2d,#0", -1, (), 28),
+    ("xar_1", "Xar 31w 29w 30w 1w", "xar v31.2d,v29.2d,v30.2d,#1", -1, (), 28),
+    ("xar_63", "Xar 28w 28w 30w 63w", "xar v28.2d,v28.2d,v30.2d,#63", -1, (), 28),
 ]
 
-for name, instruction, assembly, _, aliases, _ in SIMD_PROBES + PERMUTE_SIMD_PROBES + CRYPTO_SIMD_PROBES:
+# Structure loads and stores use the four observed registers from V28 (or V30,
+# wrapping to V1) and address the data window through X1; register post-index
+# forms add X2.
+ARRANGEMENTS = [("8b", 0, False), ("16b", 0, True), ("4h", 1, False), ("8h", 1, True),
+                ("2s", 2, False), ("4s", 2, True), ("1d", 3, False), ("2d", 3, True)]
+MULTI_FORMS = [("ld1", 7, 1, 1), ("ld1", 10, 2, 1), ("ld1", 6, 3, 1), ("ld1", 2, 4, 1),
+               ("ld2", 8, 1, 2), ("ld3", 4, 1, 3), ("ld4", 0, 1, 4)]
+LANE_SIZES = [("b", 1), ("h", 2), ("s", 4), ("d", 8)]
+STRUCTURE_PROBES = []
+STRUCTURE_INDEXED = set()
+STRUCTURE_WIDE = set()
+
+
+def register_list(base: int, count: int, suffix: str) -> tuple[str, ...]:
+    names = [f"v{(base + i) % 32}.{suffix}" for i in range(count)]
+    listed = "{" + ",".join(names) + "}"
+    ranged = "{" + f"{names[0]}-{names[-1]}" + "}"
+    return (listed,) if count == 1 else (listed, ranged)
+
+
+def add_structure(name: str, instruction: str, mnemonic: str, registers: tuple[str, ...],
+                  lane: str, mode: int, total: int, base: int) -> None:
+    suffix = ("[x1]", f"[x1],#{total}", "[x1],x2")[mode]
+    texts = [f"{mnemonic} {r}{lane},{suffix}" for r in registers]
+    if mode == 2:
+        STRUCTURE_INDEXED.add(name)
+    if total > 56:
+        STRUCTURE_WIDE.add(name)
+    STRUCTURE_PROBES.append((name, instruction, texts[0], 1, tuple(texts[1:]), base))
+
+
+def build_structure_probes() -> None:
+    i = 0
+    for load in (True, False):
+        for op, opc, rpt, selem in MULTI_FORMS:
+            for arrangement, size, q in ARRANGEMENTS:
+                if size == 3 and not q and selem != 1:
+                    continue
+                count = rpt * selem
+                mode, base = i % 3, 30 if i % 5 == 0 else 28
+                i += 1
+                mnemonic = op if load else "st" + op[2:]
+                name = f"{mnemonic}_{count}r_{arrangement}_m{mode}"
+                m = ("0w", "31w", "2w")[mode]
+                instruction = (f"MemMulti {'T' if q else 'F'} {'T' if load else 'F'} "
+                               f"{'F' if mode == 0 else 'T'} {m} {opc}w {size}w {base}w 1w")
+                add_structure(name, instruction, mnemonic,
+                              register_list(base, count, arrangement), "", mode,
+                              count * (16 if q else 8), base)
+        for (element, bytes_), scale in zip(LANE_SIZES, range(4)):
+            for selem in range(1, 5):
+                lanes = 16 // bytes_
+                index = lanes - 1 if (selem + scale) % 2 == 0 else (5 * selem + 3) % lanes
+                mode, base = i % 3, 30 if i % 5 == 0 else 28
+                i += 1
+                mnemonic = f"{'ld' if load else 'st'}{selem}"
+                name = f"{mnemonic}_{element}{index}_m{mode}"
+                if element == "b":
+                    q, S, size, opc = index >> 3, (index >> 2) & 1, index & 3, 0
+                elif element == "h":
+                    q, S, size, opc = index >> 2, (index >> 1) & 1, (index & 1) << 1, 2
+                elif element == "s":
+                    q, S, size, opc = index >> 1, index & 1, 0, 4
+                else:
+                    q, S, size, opc = index, 0, 1, 4
+                opc += (selem - 1) // 2
+                r = (selem - 1) % 2
+                m = ("0w", "31w", "2w")[mode]
+                instruction = (f"MemLane {'T' if q else 'F'} {'T' if load else 'F'} "
+                               f"{'F' if mode == 0 else 'T'} {m} {'T' if r else 'F'} {opc}w "
+                               f"{'T' if S else 'F'} {size}w {base}w 1w")
+                add_structure(name, instruction, mnemonic,
+                              register_list(base, selem, element), f"[{index}]", mode,
+                              selem * bytes_, base)
+    for selem in range(1, 5):
+        for arrangement, size, q in ARRANGEMENTS:
+            mode, base = i % 3, 30 if i % 5 == 0 else 28
+            i += 1
+            mnemonic = f"ld{selem}r"
+            name = f"{mnemonic}_{arrangement}_m{mode}"
+            m = ("0w", "31w", "2w")[mode]
+            instruction = (f"MemLane {'T' if q else 'F'} T {'F' if mode == 0 else 'T'} {m} "
+                           f"{'T' if (selem - 1) % 2 else 'F'} {6 + (selem - 1) // 2}w F "
+                           f"{size}w {base}w 1w")
+            add_structure(name, instruction, mnemonic,
+                          register_list(base, selem, arrangement), "", mode,
+                          selem * 2 ** size, base)
+
+
+build_structure_probes()
+
+for name, instruction, assembly, _, aliases, _ in SIMD_PROBES + PERMUTE_SIMD_PROBES + CRYPTO_SIMD_PROBES + STRUCTURE_PROBES:
     PROBES[name] = instruction, tuple(canonical(text) for text in (assembly, *aliases))
 
 
 def write_simd_probes(directory: Path) -> None:
     asm = [f'{"literal_probe" if name.startswith("ldr_lit") else "straight"} {name}, "{assembly}"'
-           for name, _, assembly, _, _, _ in SIMD_PROBES + PERMUTE_SIMD_PROBES + CRYPTO_SIMD_PROBES]
+           for name, _, assembly, _, _, _ in SIMD_PROBES + PERMUTE_SIMD_PROBES + CRYPTO_SIMD_PROBES + STRUCTURE_PROBES]
     cases = [
         f"X({name}, {pointer}, {int(name in SIMD_INDEXED)}, 0, {base})"
         for name, _, _, pointer, _, base in SIMD_PROBES
     ]
-    # Native dispatch uses the even register number times four as a byte offset.
+    # Native dispatch uses the even register number times eight as a byte offset
+    # into 16-byte entries; the four registers wrap from V31 to V0.
     for label, op, done in (("load", "ldp", "loads"), ("store", "stp", "stores")):
-        asm.append(f".L{label}_pairs:")
+        asm.append(f".L{label}_vectors:")
         for base in SIMD_PAIR_BASES:
-            asm += [f"    {op} q{base}, q{base + 1}, [x9, #32]", f"    b .L{done}_done"]
+            asm += [f"    {op} q{base}, q{base + 1}, [x9, #32]",
+                    f"    {op} q{(base + 2) % 32}, q{(base + 3) % 32}, [x9, #64]",
+                    f"    b .L{done}_done", "    nop"]
     permute_cases = [
         f"X({name}, {pointer}, 0, 0, {base})"
         for name, _, _, pointer, _, base in PERMUTE_SIMD_PROBES
@@ -501,11 +615,18 @@ def write_simd_probes(directory: Path) -> None:
         f"X({name}, {pointer}, 0, 0, {base})"
         for name, _, _, pointer, _, base in CRYPTO_SIMD_PROBES
     ]
+    structure_cases = [
+        f"X({name}, {pointer}, {int(name in STRUCTURE_INDEXED)}, 0, {base})"
+        for name, _, _, pointer, _, base in STRUCTURE_PROBES
+    ]
+    wide = " || ".join(f"id == Case_{name}" for name in sorted(STRUCTURE_WIDE))
     (directory / "simd_probes.S").write_text("\n".join(asm) + "\n")
     (directory / "simd_probes.h").write_text(
         "#define SIMD_CASES(X) " + " ".join(cases)
         + "\n#define PERMUTE_CASES(X) " + " ".join(permute_cases) + "\n"
         "#define CRYPTO_SIMD_CASES(X) " + " ".join(crypto_cases) + "\n"
+        "#define STRUCTURE_CASES(X) " + " ".join(structure_cases) + "\n"
+        f"#define WIDE_CASE(id) ({wide})\n"
     )
 
 
@@ -555,19 +676,19 @@ def normalize_instruction(address: int, text: str) -> str:
 
 def observation(row: str) -> str:
     fields = row.split()
-    if len(fields) != 13:
-        raise ValueError(f"expected thirteen state fields, got {row}")
+    if len(fields) != 17:
+        raise ValueError(f"expected seventeen state fields, got {row}")
     pc = 256 + int(fields[0])
     sp = int(fields[1], 16)
     nzcv = int(fields[2], 16)
     registers = [int(w, 16) for w in fields[3:7]]
-    vectors = [int(w, 16) for w in fields[7:11]]
-    link = int(fields[11], 16)
-    data = bytes.fromhex(fields[12])
+    vectors = [int(w, 16) for w in fields[7:15]]
+    link = int(fields[15], 16)
+    data = bytes.fromhex(fields[16])
     if len(data) != 64:
         raise ValueError(f"expected 64 bytes, got {len(data)}")
     regs = [f"0x{w:016x}w" for w in registers]
-    packed = [vectors[i] | (vectors[i + 1] << 64) for i in (0, 2)]
+    packed = [vectors[i] | (vectors[i + 1] << 64) for i in (0, 2, 4, 6)]
     return (
         f"({pc}w, 0x{sp:x}w, {nzcv}w, 0x{link:016x}w, [{'; '.join(regs)}],\n"
         f"       [{'; '.join(f'0x{v:032x}w' for v in packed)}],\n"
@@ -581,7 +702,7 @@ def generated(directory: Path, objdump: Path) -> tuple[str, int]:
         program = Path(temporary) / "native"
         write_scalar_probes(Path(temporary))
         write_simd_probes(Path(temporary))
-        command("/usr/bin/as", "-march=armv8-a+crc+crypto", "-I", temporary, "-o", obj, directory / "native_a64.S")
+        command("/usr/bin/as", "-march=armv8.2-a+crc+crypto+sha3", "-I", temporary, "-o", obj, directory / "native_a64.S")
         command("/usr/bin/gcc", "-O2", "-Wall", "-Wextra", "-Werror", "-I", temporary,
                 directory / "native_a64.c", obj, "-o", program)
         addresses = {
@@ -627,7 +748,7 @@ def generated(directory: Path, objdump: Path) -> tuple[str, int]:
     l3_clz_zero = []
     crc_cases = []
     simd_cases = []
-    simd_bases = {name: base for name, *_, base in SIMD_PROBES + PERMUTE_SIMD_PROBES + CRYPTO_SIMD_PROBES}
+    simd_bases = {name: base for name, *_, base in SIMD_PROBES + PERMUTE_SIMD_PROBES + CRYPTO_SIMD_PROBES + STRUCTURE_PROBES}
     for i in range(0, len(rows), 3):
         n = i // 3
         header, initial, final = rows[i:i + 3]

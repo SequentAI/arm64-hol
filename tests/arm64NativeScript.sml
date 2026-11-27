@@ -28,10 +28,23 @@ Definition read_window_def:
     lookup_default default tree base :: read_window default n (base + 1) tree
 End
 
+(* The observed vector registers start at vbase and wrap from V31 to V0. *)
+Definition put_vectors_def:
+  put_vectors base [] tree = tree ∧
+  put_vectors base (value::values) tree =
+    put_vectors ((base + 1) MOD 32) values (insert base value tree)
+End
+
+Definition read_vectors_def:
+  read_vectors 0 base tree = [] ∧
+  read_vectors (SUC n) base tree =
+    lookup_default 0w tree base :: read_vectors n ((base + 1) MOD 32) tree
+End
+
 Definition test_state_at_def:
   test_state_at vbase w (pc,sp,flags,link,regs,vectors,data) : finite_state =
     let gpr = insert 30 link (put_many 0 regs LN);
-        vec = put_many vbase vectors LN;
+        vec = put_vectors vbase vectors LN;
         code = put_many 208 literal_pool (put_many 268 literal_pool
           (put_many 256 [byte_at w 0; byte_at w 1; byte_at w 2; byte_at w 3] LN));
         mem = put_many 4096 data code;
@@ -50,7 +63,7 @@ Definition observe_at_def:
   observe_at vbase (s:finite_state) : observation =
     (s.pc, s.sp, bits_of_nzcv s.nzcv, lookup_word 0w s.regs (30w:word5),
      read_window 0w 4 0 s.regs,
-     read_window 0w 2 vbase s.vregs,
+     read_vectors 4 vbase s.vregs,
      read_window 0w 64 4096 s.mem)
 End
 
