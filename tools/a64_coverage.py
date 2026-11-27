@@ -27,7 +27,7 @@ A clause is covered when HOL4 decodes all its valid samples, and
 unsampled when no sample is valid. Any sample HOL4 decodes but Sail
 rejects is listed as a mismatch.
 
-Usage: a64_coverage.py [--sail DIR] [--samples N] [--json FILE]
+Usage: a64_coverage.py [--sail DIR] [--samples N] [--json FILE] [--accept-add]
 """
 from __future__ import annotations
 
@@ -36,6 +36,7 @@ import hashlib
 import json
 import random
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -822,21 +823,207 @@ val _ = TextIO.closeOut out;
 """
 
 
-def hol_decodes(words: list[int], repo: Path) -> list[bool]:
+def run_hol(repo: Path, script: str, inputs: dict[str, str]) -> list[str]:
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
-        (tmp / "words").write_text("\n".join(map(str, words)) + "\n")
-        script = (HOL_SCRIPT.replace("WORDS", str(tmp / "words"))
-                  .replace("RESULT", str(tmp / "result")))
-        (tmp / "decodes.sml").write_text(script)
-        run = subprocess.run(["holbuild", "run", str(tmp / "decodes.sml")], cwd=repo,
+        for name, data in inputs.items():
+            (tmp / name).write_text(data)
+            script = script.replace(name.upper(), str(tmp / name))
+        (tmp / "coverage.sml").write_text(script.replace("RESULT", str(tmp / "result")))
+        run = subprocess.run(["holbuild", "run", str(tmp / "coverage.sml")], cwd=repo,
                              stdin=subprocess.DEVNULL, capture_output=True, text=True)
         if run.returncode != 0:
             raise SystemExit("holbuild run failed:\n" + (run.stdout + run.stderr)[-3000:])
-        result = (tmp / "result").read_text().split()
+        return (tmp / "result").read_text().splitlines()
+
+
+def hol_decodes(words: list[int], repo: Path) -> list[bool]:
+    result = run_hol(repo, HOL_SCRIPT, {"words": "\n".join(map(str, words)) + "\n"})
     if len(result) != len(words):
         raise SystemExit("HOL4 returned the wrong number of results")
     return [r == "1" for r in result]
+
+
+EVIDENCE_SCRIPT = r"""
+load "wordsLib";
+load "cv_transLib";
+load "arm64L3Theory";
+open HolKernel boolLib bossLib arm64IsaCvTheory cv_transLib;
+val out = TextIO.openOut "RESULT";
+fun emit kind name word =
+  TextIO.output (out, kind ^ " " ^ name ^ " " ^
+    Arbnum.toString (wordsSyntax.dest_word_literal word) ^ "\n");
+
+(* The final theorem argument is a constant from arm64NativeCases. *)
+fun observed kind (name, thm) =
+  let val {Name, Thy, ...} = dest_thy_const (rand (concl thm))
+      val _ = if Thy = "arm64NativeCases" then () else raise Fail name
+      val sample = rhs (concl (DB.fetch Thy (Name ^ "_def")))
+  in emit kind name (fst (pairSyntax.dest_pair sample)) end;
+
+fun native (name, thm) =
+  if String.isPrefix "native_case_" name andalso String.isSuffix "_agrees" name then
+    observed "native" (name, thm)
+  else if is_eq (concl thm) then
+    case (strip_comb (lhs (concl thm)), strip_comb (rhs (concl thm))) of
+      ((step, [_, state]), (fault, [reason])) =>
+        if same_const step ``step_cv`` andalso
+           same_const fault ``Fault : fault_kind -> finite_state arm64_result`` andalso
+           not (aconv reason ``Fetch`` orelse aconv reason ``PCAlignment``) then
+          emit "fault" name (rhs (concl (EVAL ``cv_fetch ^state``)))
+        else ()
+    | _ => ()
+  else ();
+
+fun l3 (name, thm) =
+  if String.isPrefix "l3_agrees_native_case_" name orelse
+     String.isPrefix "l3_crc_agrees_native_case_" name then
+    observed "l3" (name, thm)
+  else if String.isPrefix "l3_clz_is_cls_native_case_" name then
+    observed "l3_discrepancy" (name, thm)
+  else ();
+
+val _ = List.app native (DB.theorems "arm64Native");
+val _ = List.app l3 (DB.theorems "arm64L3");
+val _ = TextIO.closeOut out;
+"""
+
+
+def hol_evidence(repo: Path, clauses: list[Clause], by_group, interp: Interp):
+    evidence = defaultdict(lambda: defaultdict(list))
+    unassigned = []
+    for line in run_hol(repo, EVIDENCE_SCRIPT, {}):
+        kind, theorem, word = line.split()
+        status, owner = sail_decode(int(word), clauses, by_group, interp)
+        if status == "valid":
+            evidence[owner.index][kind].append(theorem)
+        else:
+            unassigned.append({"kind": kind, "theorem": theorem,
+                               "word": f"{int(word):08x}", "sail": status})
+    return evidence, unassigned
+
+
+ADD_OPTIONS = {
+    "immediate": (0, 1 << 22),
+    "extendedreg": tuple((option << 13) | (amount << 10)
+                          for option in range(8) for amount in range(5)),
+    "carry": (0,),
+    "shiftedreg": (),
+}
+
+
+def add_probes(clauses: list[Clause], by_group, interp: Interp) -> dict[tuple[str, int], list[tuple[int, Clause]]]:
+    """Use the Sail ADD/SUB clauses to exercise each width and option field."""
+    probes = defaultdict(list)
+    prefix = "integer_arithmetic_add_sub_"
+    for clause in clauses:
+        if not clause.instr_class.startswith(prefix):
+            continue
+        form = clause.instr_class.removeprefix(prefix)
+        for sf in (0, 1):
+            options = ADD_OPTIONS[form]
+            if form == "shiftedreg":
+                amounts = (0, 1, 31, 32, 63) if sf else (0, 1, 31)
+                options = tuple((shift << 22) | (amount << 10)
+                                for shift in range(3) for amount in amounts)
+            # Include nonzero operands and Rd = 31 as well as all-zero registers.
+            operands = (1 << 10) if form == "immediate" else (3 << 16)
+            operands |= (2 << 5) | 31
+            for fields in (*options, *(option | operands for option in options)):
+                word = clause.value | (sf << 31) | fields
+                status, owner = sail_decode(word, clauses, by_group, interp)
+                if status != "valid" or owner != clause:
+                    raise SystemExit(f"Sail rejected ADD probe {word:08x}: {status}")
+                probes[form, sf].append((word, owner))
+    for form in ADD_OPTIONS:
+        for sf in (0, 1):
+            # Bits 30 and 29 select add/subtract and whether to set NZCV.
+            variants = {(word >> 29) & 3 for word, _ in probes[form, sf]}
+            if variants != {0, 1, 2, 3}:
+                raise SystemExit(f"Sail inventory is missing ADD variants for {form}, sf={sf}")
+    return dict(probes)
+
+
+def decode_state(valid: int, hit: int) -> str:
+    return ("unsampled" if valid == 0 else "covered" if hit == valid
+            else "partial" if hit else "missing")
+
+
+def coverage_report(repo: Path, clauses: list[Clause], rows, probes):
+    words = sorted({w for w, *_ in rows})
+    decoded = dict(zip(words, hol_decodes(words, repo), strict=True))
+    per_clause = defaultdict(Counter)
+    mismatches = []
+    for word, sampled, status, owner in rows:
+        clause = owner or sampled
+        hol = decoded[word]
+        per_clause[clause.index][(status, hol)] += 1
+        if hol and status in ("undefined", "unpredictable"):
+            mismatches.append((word, clause, status))
+
+    report = []
+    for clause in clauses:
+        counts = per_clause[clause.index]
+        valid = counts[("valid", True)] + counts[("valid", False)]
+        hit = counts[("valid", True)]
+        report.append({"clause": clause.index, "group": clause.group,
+                       "mnemonic": clause.mnemonic, "class": clause.instr_class,
+                       "decoder": clause.decoder, "area": clause.area,
+                       "mask": f"{clause.mask:08x}", "value": f"{clause.value:08x}",
+                       "exclude": clause.exclude and [f"{x:08x}" for x in clause.exclude],
+                       "features": clause.features, "state": decode_state(valid, hit),
+                       "valid": valid, "decoded": hit,
+                       "unknown": counts[("unknown", True)] + counts[("unknown", False)]})
+    add_widths = []
+    for (form, sf), cases in sorted(probes.items()):
+        hit = sum(decoded[word] for word, _ in cases)
+        add_widths.append({"form": form, "width": 64 if sf else 32,
+                           "state": decode_state(len(cases), hit),
+                           "valid": len(cases), "decoded": hit})
+    return report, add_widths, mismatches
+
+
+def check_add(repo: Path, clauses: list[Clause], rows, probes, report, add_widths) -> None:
+    def by_width(width_rows):
+        return {(row["form"], row["width"]): row["state"] for row in width_rows}
+
+    baseline = by_width(add_widths)
+    missing = [row for row, state in baseline.items() if state != "covered"]
+    if missing:
+        raise SystemExit(f"ADD coverage is missing these width rows: {missing}")
+
+    target = ("immediate", 32)
+    condition = "else if w && 0x1f800000w = 0x11000000w then"
+    with tempfile.TemporaryDirectory(prefix="a64-add-") as directory:
+        copy = Path(directory)
+        for name in ("holproject.toml", "holexamples.manifest.toml", "arm64HolScript.sml"):
+            shutil.copy2(repo / name, copy / name)
+        shutil.copytree(repo / "isa", copy / "isa")
+        (copy / "tests").mkdir()
+        for script in (repo / "tests").glob("*Script.sml"):
+            shutil.copy2(script, copy / "tests" / script.name)
+        isa = copy / "isa/arm64IsaScript.sml"
+        source = isa.read_text()
+        if source.count(condition) != 1:
+            raise SystemExit("Could not find the ADD immediate classifier branch to mutate")
+        isa.write_text(source.replace(condition, condition + "\n        if ¬sf then NONE else"))
+        subprocess.run(["holbuild", "-j4", "build", "arm64IsaCvTheory"], cwd=copy, check=True)
+        mutant_report, mutant_widths, _ = coverage_report(copy, clauses, rows, probes)
+    clause_ids = [row["clause"] for row in report]
+    if len(clause_ids) != len(clauses) or [row["clause"] for row in mutant_report] != clause_ids:
+        raise SystemExit("The ADD mutation changed the Sail coverage denominator")
+    immediate_clauses = {clause.index for _, clause in probes["immediate", 0]}
+    for original, mutant in zip(report, mutant_report, strict=True):
+        if original["clause"] in immediate_clauses:
+            if original["state"] != "covered" or mutant["state"] != "partial":
+                raise SystemExit(f"Expected the {original['mnemonic']} clause to become partial")
+        elif original["decoded"] != mutant["decoded"] or original["state"] != mutant["state"]:
+            raise SystemExit(f"Unexpected coverage change for {original['mnemonic']}")
+    expected = baseline | {target: "missing"}
+    if by_width(mutant_widths) != expected:
+        raise SystemExit(f"Expected only the W immediate ADD row missing, got {mutant_widths}")
+    print(f"ADD acceptance passed: {len(add_widths)} width rows, only W immediate lost, "
+          f"Sail denominator {len(clause_ids)} clauses")
 
 
 # ---------------------------------------------------------------------------
@@ -847,6 +1034,8 @@ def main() -> None:
                         help="arm-v9.4-a/src directory (default: fetch the pinned files)")
     parser.add_argument("--samples", type=int, default=64, help="random words per clause")
     parser.add_argument("--json", type=Path, help="write the per-clause report here")
+    parser.add_argument("--accept-add", action="store_true",
+                        help="verify the fixture-free ADD width regression")
     args = parser.parse_args()
 
     texts = []
@@ -870,32 +1059,20 @@ def main() -> None:
         for word in samples(clause, args.samples, rng):
             status, owner = sail_decode(word, clauses, by_group, interp)
             rows.append((word, clause, status, owner))
+    # CAS W0, W1, [X2] is valid at EL0. The model omits atomic accesses.
+    cas_word = 0x88A07C41
+    status, cas_clause = sail_decode(cas_word, clauses, by_group, interp)
+    if status != "valid" or cas_clause.mnemonic != "cas":
+        raise SystemExit(f"Expected Sail to decode {cas_word:08x} as valid CAS, got {status}")
+    probes = add_probes(clauses, by_group, interp)
+    witnesses = [(cas_word, cas_clause)] + [case for cases in probes.values() for case in cases]
+    sampled_words = {word for word, *_ in rows}
+    for word, owner in witnesses:
+        if word not in sampled_words:
+            rows.append((word, owner, "valid", owner))
+            sampled_words.add(word)
     repo = Path(__file__).resolve().parent.parent
-    decoded = hol_decodes([w for w, *_ in rows], repo)
-
-    per_clause = defaultdict(Counter)
-    mismatches = []
-    for (word, sampled, status, owner), hol in zip(rows, decoded):
-        clause = owner or sampled
-        per_clause[clause.index][(status, hol)] += 1
-        if hol and status in ("undefined", "unpredictable"):
-            mismatches.append((word, clause, status))
-
-    report = []
-    for clause in clauses:
-        counts = per_clause[clause.index]
-        valid = counts[("valid", True)] + counts[("valid", False)]
-        hit = counts[("valid", True)]
-        state = ("unsampled" if valid == 0 else "covered" if hit == valid
-                 else "partial" if hit else "missing")
-        report.append({"clause": clause.index, "group": clause.group,
-                       "mnemonic": clause.mnemonic, "class": clause.instr_class,
-                       "decoder": clause.decoder, "area": clause.area,
-                       "mask": f"{clause.mask:08x}", "value": f"{clause.value:08x}",
-                       "exclude": clause.exclude and [f"{x:08x}" for x in clause.exclude],
-                       "features": clause.features, "state": state,
-                       "valid": valid, "decoded": hit,
-                       "unknown": counts[("unknown", True)] + counts[("unknown", False)]})
+    report, add_widths, mismatches = coverage_report(repo, clauses, rows, probes)
 
     totals = defaultdict(Counter)
     for row in report:
@@ -915,10 +1092,37 @@ def main() -> None:
     for word, clause, status in mismatches[:20]:
         print(f"  {word:08x} {clause.mnemonic} ({clause.instr_class}): {status}")
     if args.json:
-        args.json.write_text(json.dumps({"sail_commit": None if args.sail else SAIL_COMMIT,
-                                         "sail_sha256": digest, "clauses": report,
-                                         "mismatches": [f"{w:08x}" for w, *_ in mismatches]},
-                                        indent=1) + "\n")
+        evidence, unassigned = hol_evidence(repo, clauses, by_group, interp)
+        for row in report:
+            tests = evidence[row["clause"]]
+            row["execution"] = {
+                "state_update_observations": len(tests["native"]),
+                "instruction_fault_theorems": sorted(tests["fault"]),
+            }
+            row["validation"] = {
+                "native": sorted(tests["native"]),
+                "l3": sorted(tests["l3"]),
+                "l3_discrepancies": sorted(tests["l3_discrepancy"]),
+            }
+        args.json.write_text(json.dumps({
+            "sail_commit": None if args.sail else SAIL_COMMIT,
+            "sail_sha256": digest,
+            "clauses": report,
+            "add_widths": add_widths,
+            "mismatches": [f"{w:08x}" for w, *_ in mismatches],
+            "unassigned_evidence": unassigned,
+            "universal": {
+                "encode_after_successful_decode": "arm64IsaTheory.encode_of_decode",
+                "finite_execution_refines_model": "arm64IsaCvTheory.step_cv_refines",
+            },
+        }, indent=1) + "\n")
+    if args.accept_add:
+        if mismatches:
+            raise SystemExit("HOL4 accepted a sampled encoding rejected by Sail")
+        if not any(row["clause"] == cas_clause.index and row["state"] == "missing"
+                   for row in report):
+            raise SystemExit("Expected the valid CAS clause to have state missing")
+        check_add(repo, clauses, rows, probes, report, add_widths)
 
 
 if __name__ == "__main__":

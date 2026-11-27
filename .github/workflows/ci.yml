@@ -33,6 +33,14 @@ jobs:
             arm64CryptoVectorsTheory arm64NativeCasesTheory arm64NativeTheory arm64L3Theory \
             arm64HolTheory
 
+      - name: Check A64 coverage and the ADD regression
+        run: python3 tools/a64_coverage.py --samples 0 --json a64-coverage.json --accept-add
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: a64-coverage
+          path: a64-coverage.json
+
   native:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-24.04-arm

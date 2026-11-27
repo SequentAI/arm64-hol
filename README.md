@@ -76,7 +76,30 @@ them in HOL4, and reports, per instruction area, the clauses the model
 covers and any word it accepts that Sail rejects.
 
 ```sh
-python3 tools/a64_coverage.py --json coverage.json
+python3 tools/a64_coverage.py --json a64-coverage.json
+```
+
+The JSON gives each clause's mask, opcode and decode status, including
+partial and missing clauses. `encode_of_decode` guarantees round-trip for
+every successful decode. The report attaches checked state-update
+observations, instruction fault theorems and L3 comparisons to clauses by
+instruction word. Empty evidence lists indicate that the report has no
+matching check for that clause. These observations cover individual
+states, and `step_cv_refines` relates the executable evaluator to the
+HOL model for all states.
+
+CI samples the two extremes of each clause's operand fields and includes
+targeted ADD and CAS probes. The report gives separate width rows for
+each ADD form and counts the probes in the corresponding Sail clauses.
+The ADD probes include flag-setting and subtract variants, immediate
+shifts, register shifts and extensions. The regression test rebuilds
+the decoder in a temporary copy with 32-bit ADD immediate disabled and
+reruns the report. It checks that precisely that ADD row becomes missing,
+the corresponding Sail clauses become partial, the clause inventory
+stays fixed, and valid EL0 CAS is explicitly missing.
+
+```sh
+python3 tools/a64_coverage.py --samples 0 --json a64-coverage.json --accept-add
 ```
 
 Released under the [BSD 3-Clause License](LICENSE).
