@@ -234,6 +234,19 @@ Proof
             [`1`, `2`, `3`, `4`])
 QED
 
+(* Register numbers below 31 name general-purpose registers. *)
+Theorem w2n_lt_31:
+  w2n (w:word5) < 31 ⇔ w ≠ 31w
+Proof
+  Cases_on `w` >> fs[]
+QED
+
+Theorem word5_eq_n2w:
+  k < 32 ⇒ ((w:word5) = n2w k ⇔ w2n w = k)
+Proof
+  Cases_on `w` >> fs[]
+QED
+
 (* Memory reads check that each byte address, w2n a + k, is in range. *)
 Theorem w2n_lt_64:
   w2n (w:word64) < 18446744073709551616
@@ -285,4 +298,37 @@ Proof
   simp[arm64IsaTheory.fetch_def, numLib.SUC_RULE arm64IsaTheory.read_bytes_def,
        arm64IsaTheory.functional_storage_def] >>
   blastLib.BBLAST_TAC
+QED
+
+(* The specification's register named for a general-purpose register
+   number, as arm64-hol's register. *)
+Theorem state_rel_gpr:
+  state_rel s asl ⇒ n ≠ 31w ⇒
+  asl.regstate.bitvector_64_reg (STRING #"R" (toString (w2n n))) = s.regs n
+Proof
+  rw[state_rel_def, gpr_rel_def] >>
+  first_x_assum (qspec_then `w2n n` mp_tac) >> simp[w2n_lt_31]
+QED
+
+(* The specification computes 32-bit results on the low halves of 64-bit
+   values, as arm64-hol's w2w does. *)
+Theorem low_word32:
+  (31 >< 0) (w:word64) : word32 = w2w w ∧
+  w2w (¬w : word64) : word32 = ¬w2w w ∧
+  w2w (w2w (x:word12) : word64) : word32 = w2w x ∧
+  w2w ((w2w (x:word12) : word64) << k) : word32 = w2w x << k
+Proof
+  rpt conj_tac >- blastLib.BBLAST_TAC >- blastLib.BBLAST_TAC >- blastLib.BBLAST_TAC >>
+  srw_tac [wordsLib.WORD_BIT_EQ_ss] [] >> eq_tac >> rw[]
+QED
+
+(* The flags the specification writes to PSTATE, as arm64-hol's. *)
+Theorem flags_word_bits:
+  (3 >< 3) (flags_word f) = v2w [FST f] : 1 word ∧
+  (2 >< 2) (flags_word f) = v2w [FST (SND f)] : 1 word ∧
+  (1 >< 1) (flags_word f) = v2w [FST (SND (SND f))] : 1 word ∧
+  (0 >< 0) (flags_word f) = v2w [SND (SND (SND f))] : 1 word
+Proof
+  PairCases_on `f` >> Cases_on `f0` >> Cases_on `f1` >> Cases_on `f2` >> Cases_on `f3` >>
+  EVAL_TAC
 QED

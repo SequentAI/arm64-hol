@@ -93,6 +93,19 @@ Definition arm64_asl_next_def:
       if taken then returnS () else write_regS PC_ref (pc + 4w))))))))
 End
 
+(* The specification simulates an instruction when, from any state related
+   to one arm64-hol executes it in, the specification's step has exactly one
+   outcome, which is related to arm64-hol's next state. *)
+Definition asl_sim_def:
+  asl_sim i ⇔
+    ∀s s' asl.
+      state_rel s asl ∧ arm64_asl_ok asl ∧ s.pc && 3w = 0w ∧
+      encode i = SOME (fetch functional_storage s) ∧
+      execute_with functional_storage i s = Next s' ⇒
+      ∃asl'. arm64_asl_next asl = {(Value (), asl')} ∧
+             state_rel s' asl' ∧ arm64_asl_ok asl'
+End
+
 (* The specification writes a register by updating a function from register
    names; this states such an update as an update of a function, which
    evaluation can reduce without going under a binder. *)

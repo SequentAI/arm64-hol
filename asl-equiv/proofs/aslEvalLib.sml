@@ -118,13 +118,36 @@ in
                        (computeLib.add_thms (wordsTheory.word_bit_def :: defs) exec_cmp))
        |> CONJUNCTS
 
+  (* A field of an instruction's encoding, (h >< l) w, as the variable of
+     the encoding that it is, proved bit by bit. Fields recur, so each is
+     proved once. *)
+  fun ERR f m = mk_HOL_ERR "aslEvalLib" f m
+  val field_cache = ref ([] : thm list)
+  fun FIELD_CONV t =
+    case List.find (fn th => aconv (lhs (concl th)) t) (!field_cache) of
+      SOME th => th
+    | NONE =>
+    let
+      val (_, _, w, _) = wordsSyntax.dest_word_extract t
+      val vs = List.filter (fn v => type_of v = type_of t) (free_vars w)
+      fun try [] = raise ERR "FIELD_CONV" "no variable"
+        | try (v :: vs) = blastLib.BBLAST_PROVE (mk_eq (t, v))
+                          handle HOL_ERR _ => try vs
+                               | HolSatLib.SAT_cex _ => try vs
+      val th = try vs
+    in
+      field_cache := th :: List.take (!field_cache, Int.min (length (!field_cache), 63));
+      th
+    end
+  val FIELDS_CONV = DEPTH_CONV FIELD_CONV
+
   (* Proves a guard true or false from facts about bits of registers. Integer
      comparisons of words' values become comparisons of words first. *)
   val guard_conv =
     QCONV (SIMP_CONV (srw_ss())
       [integerTheory.int_ge, integerTheory.int_gt, integerTheory.INT_LT,
        integerTheory.INT_LE, integerTheory.INT_INJ, aslLemmasTheory.w2n_le_word_ls,
-       aslLemmasTheory.w2n_lt_64, aslLemmasTheory.w2n_add_lt_64,
+       aslLemmasTheory.w2n_lt_31, aslLemmasTheory.w2n_lt_64, aslLemmasTheory.w2n_add_lt_64,
        aslLemmasTheory.w2n_lt_word_lo, aslLemmasTheory.w2n_eq_n2w])
   fun decide facts g =
     let
@@ -143,9 +166,12 @@ in
       val hyp = list_mk_conj (map concl word_facts)
       val facts_th = LIST_CONJ word_facts
       fun is_bool_lit t = aconv t T orelse aconv t F
+      (* Fields of the encoding first, so that a guard on one (Rn = 31, say)
+         is the fact about it (n ≠ 31w) that rewriting settles. *)
       val pre =
-        QCONV (PURE_REWRITE_CONV eqs THENC EXEC THENC
-               (fn t => if is_bool_lit t then raise UNCHANGED else guard_conv t)) g
+        QCONV (FIELDS_CONV THENC PURE_REWRITE_CONV eqs THENC EXEC THENC
+               (fn t => if is_bool_lit t then raise UNCHANGED
+                        else (guard_conv THENC REWRITE_CONV eqs) t)) g
       val g' = rhs (concl pre)
       (* Most guards hold or fail by themselves (bits of an instruction's
          encoding, say); only the rest need the facts. *)
