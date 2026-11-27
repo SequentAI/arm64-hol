@@ -222,7 +222,8 @@ static void run_case(const char *name, instruction code, enum case_id id,
                 ? UINT64_C(0x1122334400000000) | (uint32_t)index
                 : index;
         } else if (indexed) {
-            s.regs[2] = id == Case_ldrh_reg
+            // Upper bits catch a truncated index or writeback increment.
+            s.regs[2] = id == Case_ldrh_reg || POST_REGISTER_CASE(id)
                 ? UINT64_C(0x1122334400000000) | n
                 : n;
         }

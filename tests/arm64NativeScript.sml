@@ -224,6 +224,61 @@ val () = check_fault "q_store_rejects_unwritable_last_byte" enabled
   ``^q_store with perms := insert 4111 (perm T F F) (^q_store).perms`` ``Store``;
 val () = check_fault "q_store_checks_sp_before_access" enabled
   ``test_state 0x3d8003e0w ^initial with sp := 4097w`` ``SPAlignment``;
+(* Structure transfers check every byte and SP alignment before any access. *)
+val multi_load = ``test_state 0x4c40a000w ^initial``;
+val () = check_fault "multi_load_rejects_unreadable_last_byte" enabled
+  ``^multi_load with perms := insert 4127 (perm F F F) (^multi_load).perms`` ``Load``;
+val multi_store = ``test_state 0x4c00a000w ^initial``;
+val () = check_fault "multi_store_rejects_unwritable_last_byte" enabled
+  ``^multi_store with perms := insert 4127 (perm T F F) (^multi_store).perms`` ``Store``;
+val lane_load = ``test_state 0x4d60a400w ^initial``;
+val () = check_fault "lane_load_rejects_unreadable_last_byte" enabled
+  ``^lane_load with perms := insert 4127 (perm F F F) (^lane_load).perms`` ``Load``;
+val lane_store = ``test_state 0x0d20b000w ^initial``;
+val () = check_fault "lane_store_rejects_unwritable_last_byte" enabled
+  ``^lane_store with perms := insert 4111 (perm T F F) (^lane_store).perms`` ``Store``;
+(* The first byte is also inaccessible, so a permission check made first
+   would report Load or Store. *)
+val sp_multi_load = ``test_state 0x4c4073e0w ^initial with sp := 4097w``;
+val () = check_fault "multi_load_checks_sp_before_access" enabled
+  ``^sp_multi_load with perms := insert 4097 (perm F F F) (^sp_multi_load).perms``
+  ``SPAlignment``;
+val sp_lane_store = ``test_state 0x0d0003e0w ^initial with sp := 4097w``;
+val () = check_fault "lane_store_checks_sp_before_access" enabled
+  ``^sp_lane_store with perms := insert 4097 (perm T F F) (^sp_lane_store).perms``
+  ``SPAlignment``;
+
+(* Each crypto instruction needs its own feature. *)
+val () = app (fn (name, feat, word) =>
+    check_fault (name ^ "_requires_its_feature") feat
+      ``test_state ^word ^initial`` ``Unsupported``)
+  [("sha1c", ``^enabled with sha1 := F``, ``0x5e020020w : word32``),
+   ("sha1p", ``^enabled with sha1 := F``, ``0x5e021020w : word32``),
+   ("sha1m", ``^enabled with sha1 := F``, ``0x5e022020w : word32``),
+   ("sha1su0", ``^enabled with sha1 := F``, ``0x5e023020w : word32``),
+   ("sha1h", ``^enabled with sha1 := F``, ``0x5e280820w : word32``),
+   ("sha1su1", ``^enabled with sha1 := F``, ``0x5e281820w : word32``),
+   ("sha256h", ``^enabled with sha256 := F``, ``0x5e024020w : word32``),
+   ("sha256h2", ``^enabled with sha256 := F``, ``0x5e025020w : word32``),
+   ("sha256su1", ``^enabled with sha256 := F``, ``0x5e026020w : word32``),
+   ("sha256su0", ``^enabled with sha256 := F``, ``0x5e282820w : word32``),
+   ("sha512h", ``^enabled with sha512 := F``, ``0xce628020w : word32``),
+   ("sha512h2", ``^enabled with sha512 := F``, ``0xce628420w : word32``),
+   ("sha512su1", ``^enabled with sha512 := F``, ``0xce628820w : word32``),
+   ("sha512su0", ``^enabled with sha512 := F``, ``0xcec08020w : word32``),
+   ("rax1", ``^enabled with sha3 := F``, ``0xce628c20w : word32``),
+   ("eor3", ``^enabled with sha3 := F``, ``0xce020c20w : word32``),
+   ("bcax", ``^enabled with sha3 := F``, ``0xce220c20w : word32``),
+   ("xar", ``^enabled with sha3 := F``, ``0xce820c20w : word32``),
+   ("sm3partw1", ``^enabled with sm3 := F``, ``0xce62c020w : word32``),
+   ("sm3partw2", ``^enabled with sm3 := F``, ``0xce62c420w : word32``),
+   ("sm3ss1", ``^enabled with sm3 := F``, ``0xce420c20w : word32``),
+   ("sm3tt1a", ``^enabled with sm3 := F``, ``0xce429020w : word32``),
+   ("sm3tt1b", ``^enabled with sm3 := F``, ``0xce429420w : word32``),
+   ("sm3tt2a", ``^enabled with sm3 := F``, ``0xce429820w : word32``),
+   ("sm3tt2b", ``^enabled with sm3 := F``, ``0xce429c20w : word32``),
+   ("sm4ekey", ``^enabled with sm4 := F``, ``0xce62c820w : word32``),
+   ("sm4e", ``^enabled with sm4 := F``, ``0xcec08420w : word32``)];
 val () = check_fault "umulh_rejects_reserved_accumulator" enabled
   ``test_state 0x9bc07800w ^initial`` ``Unsupported``;
 val no_asimd = EVAL ``^enabled with asimd := F``;

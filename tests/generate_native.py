@@ -669,7 +669,9 @@ def build_structure_probes() -> None:
         for (element, bytes_), scale in zip(LANE_SIZES, range(4)):
             for selem in range(1, 5):
                 lanes = 16 // bytes_
-                index = lanes - 1 if (selem + scale) % 2 == 0 else (5 * selem + 3) % lanes
+                # Cycle through the top lane, lane 0 and an interior lane.
+                choice = (selem + scale + (0 if load else 1)) % 3
+                index = (lanes - 1, 0, (5 * selem + 3) % lanes)[choice]
                 mode, base = i % 3, 30 if i % 5 == 0 else 28
                 i += 1
                 mnemonic = f"{'ld' if load else 'st'}{selem}"
@@ -742,6 +744,7 @@ def write_simd_probes(directory: Path) -> None:
     ]
     integer_cases = [f"X({name}, -1, 0, 0, 28)" for name, *_ in INTEGER_PROBES]
     wide = " || ".join(f"id == Case_{name}" for name in sorted(STRUCTURE_WIDE))
+    post_register = " || ".join(f"id == Case_{name}" for name in sorted(STRUCTURE_INDEXED))
     (directory / "simd_probes.S").write_text("\n".join(asm) + "\n")
     (directory / "simd_probes.h").write_text(
         "#define SIMD_CASES(X) " + " ".join(cases)
@@ -750,6 +753,7 @@ def write_simd_probes(directory: Path) -> None:
         "#define STRUCTURE_CASES(X) " + " ".join(structure_cases) + "\n"
         "#define INTEGER_SIMD_CASES(X) " + " ".join(integer_cases) + "\n"
         f"#define WIDE_CASE(id) ({wide})\n"
+        f"#define POST_REGISTER_CASE(id) ({post_register})\n"
     )
 
 
