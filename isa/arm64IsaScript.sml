@@ -1,7 +1,8 @@
 (* A64 little-endian EL0 instructions, Arm DDI 0487 and DDI 0602. *)
 Theory arm64Isa
-Ancestors arm64Crypto words list
-Libs wordsLib
+Ancestors arm64Crypto arm64Simd words list
+Libs wordsLib intLib
+val () = intLib.deprecate_int ();
 val () = app (fn n =>
   type_abbrev ("word" ^ Int.toString n, wordsSyntax.mk_word_type
     (fcpLib.index_type (Arbnum.fromInt n)))) [14, 19, 21, 26];
@@ -71,16 +72,6 @@ Datatype:
 End
 
 Datatype:
-  simd_binary = Add4S | Add2D | Cmeq16B | Eor16B | Orr16B
-End
-
-Datatype:
-  simd_unary = CmeqZero16B | Uminv16B | Addv4S | Addv8H | Uaddlp16B | Uadalp16B
-             | Cnt8B | Addv8B
-             | Rev16B | Rev32B | Rev32H | Rev64B | Rev64H | Rev64S
-End
-
-Datatype:
   simd_shift = Shl | Ushr | Sri
 End
 
@@ -126,8 +117,9 @@ Datatype:
   | MemMulti bool bool bool word5 word4 word2 word5 word5
   | MemLane bool bool bool word5 bool word3 bool word2 word5 word5
   | SimdImm bool bool word4 word8 word5
-  | SimdBinary simd_binary word5 word5 word5
-  | SimdUnary simd_unary word5 word5
+  | SimdThreeSame bool bool bool word2 word5 word5 word5 word5
+  | SimdTwoMisc bool bool bool word2 word5 word5 word5
+  | SimdAcross bool bool bool word2 word5 word5 word5
   | Crc32 bool word2 word5 word5 word5
   | Pmull bool word5 word5 word5
   | Aes aes_op word5 word5
@@ -318,29 +310,44 @@ Definition bit_masks_def:
     in (replicate esize (64 DIV esize) wrot, replicate esize (64 DIV esize) telem)
 End
 
-Definition simd_binary_base_def:
-  simd_binary_base Add4S = 0x4ea08400w ∧
-  simd_binary_base Add2D = 0x4ee08400w ∧
-  simd_binary_base Cmeq16B = 0x6e208c00w ∧
-  simd_binary_base Eor16B = 0x6e201c00w ∧
-  simd_binary_base Orr16B = 0x4ea01c00w
+(* AdvSIMD three same, two-register miscellaneous and across lanes, and their
+   scalar forms, take scalar, Q, U, size and the opcode. These are the
+   combinations each group allocates to integer instructions; the scalar
+   encodings have Q set. *)
+Definition three_same_ok_def:
+  three_same_ok scalar q u (size:word2) (opc:word5) ⇔
+    let code = w2n opc; wide = (size = 3w) in
+      if scalar then
+        q ∧ (MEM code [1; 5; 9; 11] ∨ (MEM code [6; 7; 8; 10; 16; 17] ∧ wide) ∨
+             (code = 22 ∧ (size = 1w ∨ size = 2w)))
+      else if code = 3 then T
+      else if code = 19 then (if u then size = 0w else ¬wide)
+      else if code = 22 then size = 1w ∨ size = 2w
+      else if code = 23 then ¬u ∧ ¬(wide ∧ ¬q)
+      else if MEM code [1; 5; 6; 7; 8; 9; 10; 11; 16; 17] then ¬(wide ∧ ¬q)
+      else code < 22 ∧ ¬wide
 End
 
-Definition simd_unary_base_def:
-  simd_unary_base CmeqZero16B = 0x4e209800w ∧
-  simd_unary_base Uminv16B = 0x6e31a800w ∧
-  simd_unary_base Addv4S = 0x4eb1b800w ∧
-  simd_unary_base Addv8H = 0x4e71b800w ∧
-  simd_unary_base Uaddlp16B = 0x6e202800w ∧
-  simd_unary_base Uadalp16B = 0x6e206800w ∧
-  simd_unary_base Cnt8B = 0x0e205800w ∧
-  simd_unary_base Addv8B = 0x0e31b800w ∧
-  simd_unary_base Rev16B = 0x4e201800w ∧
-  simd_unary_base Rev32B = 0x6e200800w ∧
-  simd_unary_base Rev32H = 0x6e600800w ∧
-  simd_unary_base Rev64B = 0x4e200800w ∧
-  simd_unary_base Rev64H = 0x4e600800w ∧
-  simd_unary_base Rev64S = 0x4ea00800w
+Definition two_misc_ok_def:
+  two_misc_ok scalar q u (size:word2) (opc:word5) ⇔
+    let code = w2n opc; wide = (size = 3w) in
+      if scalar then
+        q ∧ (code = 3 ∨ code = 7 ∨ (MEM code [8; 9; 11] ∧ wide) ∨
+             (code = 10 ∧ ¬u ∧ wide) ∨ (code = 18 ∧ u ∧ ¬wide) ∨ (code = 20 ∧ ¬wide))
+      else if code = 0 then (if u then w2n size < 2 else ¬wide)
+      else if code = 1 then ¬u ∧ size = 0w
+      else if code = 5 then (if u then w2n size < 2 else size = 0w)
+      else if code = 10 then ¬u ∧ ¬(wide ∧ ¬q)
+      else if code = 19 then u ∧ ¬wide
+      else if code = 28 then size = 2w
+      else if MEM code [3; 7; 8; 9; 11] then ¬(wide ∧ ¬q)
+      else MEM code [2; 4; 6; 18; 20] ∧ ¬wide
+End
+
+Definition across_ok_def:
+  across_ok scalar q u (size:word2) (opc:word5) ⇔
+    if scalar then q ∧ ¬u ∧ opc = 27w ∧ size = 3w
+    else (MEM (w2n opc) [3; 10; 26] ∨ (opc = 27w ∧ ¬u)) ∧ size ≠ 3w ∧ ¬(size = 2w ∧ ¬q)
 End
 
 Definition simd_transfer_base_def:
@@ -379,11 +386,15 @@ Definition classify_simd_def:
       let binary = w && 0xffe0fc00w; unary = w && 0xfffffc00w;
           shift = w && 0xff80fc00w; imm : word7 = w2w (w >>> 16)
       in
-      if binary = simd_binary_base Add4S then SOME (SimdBinary Add4S d n m)
-      else if binary = simd_binary_base Add2D then SOME (SimdBinary Add2D d n m)
-      else if binary = simd_binary_base Cmeq16B then SOME (SimdBinary Cmeq16B d n m)
-      else if binary = simd_binary_base Eor16B then SOME (SimdBinary Eor16B d n m)
-      else if binary = simd_binary_base Orr16B then SOME (SimdBinary Orr16B d n m)
+      if w && 0x8f200400w = 0x0e200400w then
+        SOME (SimdThreeSame (word_bit 28 w) (word_bit 30 w) (word_bit 29 w)
+                (w2w (w >>> 22)) (w2w (w >>> 11)) d n m)
+      else if w && 0x8f3e0c00w = 0x0e200800w then
+        SOME (SimdTwoMisc (word_bit 28 w) (word_bit 30 w) (word_bit 29 w)
+                (w2w (w >>> 22)) (w2w (w >>> 12)) d n)
+      else if w && 0x8f3e0c00w = 0x0e300800w then
+        SOME (SimdAcross (word_bit 28 w) (word_bit 30 w) (word_bit 29 w)
+                (w2w (w >>> 22)) (w2w (w >>> 12)) d n)
       else if feat.pmull ∧ w && 0xbfe0fc00w = 0x0ee0e000w then
         SOME (Pmull (word_bit 30 w) d n m)
       else if feat.aes ∧ unary = aes_base Aese then SOME (Aes Aese d n)
@@ -421,20 +432,6 @@ Definition classify_simd_def:
         SOME (SimdShift Ushr d n imm)
       else if shift = simd_shift_base Sri ∧ simd_shift_imm_ok imm then
         SOME (SimdShift Sri d n imm)
-      else if unary = simd_unary_base CmeqZero16B then SOME (SimdUnary CmeqZero16B d n)
-      else if unary = simd_unary_base Uminv16B then SOME (SimdUnary Uminv16B d n)
-      else if unary = simd_unary_base Addv4S then SOME (SimdUnary Addv4S d n)
-      else if unary = simd_unary_base Addv8H then SOME (SimdUnary Addv8H d n)
-      else if unary = simd_unary_base Uaddlp16B then SOME (SimdUnary Uaddlp16B d n)
-      else if unary = simd_unary_base Uadalp16B then SOME (SimdUnary Uadalp16B d n)
-      else if unary = simd_unary_base Cnt8B then SOME (SimdUnary Cnt8B d n)
-      else if unary = simd_unary_base Addv8B then SOME (SimdUnary Addv8B d n)
-      else if unary = simd_unary_base Rev16B then SOME (SimdUnary Rev16B d n)
-      else if unary = simd_unary_base Rev32B then SOME (SimdUnary Rev32B d n)
-      else if unary = simd_unary_base Rev32H then SOME (SimdUnary Rev32H d n)
-      else if unary = simd_unary_base Rev64B then SOME (SimdUnary Rev64B d n)
-      else if unary = simd_unary_base Rev64H then SOME (SimdUnary Rev64H d n)
-      else if unary = simd_unary_base Rev64S then SOME (SimdUnary Rev64S d n)
       else if unary = simd_transfer_base FmovW then SOME (SimdTransfer FmovW d n)
       else if unary = simd_transfer_base FmovX then SOME (SimdTransfer FmovX d n)
       else if unary = simd_transfer_base UmovB0 then SOME (SimdTransfer UmovB0 d n)
@@ -570,10 +567,21 @@ Definition encode_def:
      else SOME (0x0f000400w || flag_field q 30 || flag_field op 29 ||
                 insert_field 16 (imm >>> 5) || insert_field 12 cmode ||
                 insert_field 5 (imm && 31w) || insert_field 0 d)) ∧
-  encode (SimdBinary op d n m) =
-    SOME (simd_binary_base op || reg_fields d n m) ∧
-  encode (SimdUnary op d n) =
-    SOME (simd_unary_base op || reg_fields d n 0w) ∧
+  encode (SimdThreeSame scalar q u size opc d n m) =
+    (if three_same_ok scalar q u size opc then
+       SOME (0x0e200400w || flag_field scalar 28 || flag_field q 30 || flag_field u 29 ||
+             insert_field 22 size || insert_field 11 opc || reg_fields d n m)
+     else NONE) ∧
+  encode (SimdTwoMisc scalar q u size opc d n) =
+    (if two_misc_ok scalar q u size opc then
+       SOME (0x0e200800w || flag_field scalar 28 || flag_field q 30 || flag_field u 29 ||
+             insert_field 22 size || insert_field 12 opc || reg_fields d n 0w)
+     else NONE) ∧
+  encode (SimdAcross scalar q u size opc d n) =
+    (if across_ok scalar q u size opc then
+       SOME (0x0e300800w || flag_field scalar 28 || flag_field q 30 || flag_field u 29 ||
+             insert_field 22 size || insert_field 12 opc || reg_fields d n 0w)
+     else NONE) ∧
   encode (Crc32 castagnoli size d n m) =
     SOME (0x1ac04000w || flag_field (size = 3w) 31 || flag_field castagnoli 12 ||
           insert_field 10 size || reg_fields d n m) ∧
@@ -1105,69 +1113,10 @@ Definition simd_imm_value_def:
       else (old || imm) && width
 End
 
-(* Lane zero occupies the least significant bits of a vector register. *)
-Definition simd_add32_def:
-  simd_add32 0 (x:word128) (y:word128) = (0w:word128) ∧
-  simd_add32 (SUC n) x y =
-    w2w ((w2w x : word32) + w2w y) ||
-    (simd_add32 n (x >>> 32) (y >>> 32) << 32)
-End
-
-Definition simd_sum32_def:
-  simd_sum32 0 (x:word128) = (0w:word32) ∧
-  simd_sum32 (SUC n) x = w2w x + simd_sum32 n (x >>> 32)
-End
-
-Definition simd_sum16_def:
-  simd_sum16 0 (x:word128) = (0w:word16) ∧
-  simd_sum16 (SUC n) x = w2w x + simd_sum16 n (x >>> 16)
-End
-
-Definition simd_add64_def:
-  simd_add64 (x:word128) (y:word128) =
-    w2w ((w2w x : word64) + w2w y) ||
-    (((x >>> 64) + (y >>> 64)) << 64)
-End
-
-Definition simd_cmeq8_def:
-  simd_cmeq8 0 (x:word128) (y:word128) = (0w:word128) ∧
-  simd_cmeq8 (SUC n) x y =
-    (if (w2w x : word8) = w2w y then 255w else 0w) ||
-    (simd_cmeq8 n (x >>> 8) (y >>> 8) << 8)
-End
-
-Definition simd_min8_def:
-  simd_min8 0 (x:word128) = (255w:word8) ∧
-  simd_min8 (SUC n) x =
-    let lo : word8 = w2w x; hi = simd_min8 n (x >>> 8)
-    in if lo <+ hi then lo else hi
-End
-
-Definition simd_pair_sum_def:
-  simd_pair_sum 0 (x:word128) (acc:word128) = (0w:word128) ∧
-  simd_pair_sum (SUC n) x acc =
-    w2w ((w2w acc : word16) +
-         w2w (w2w x : word8) + w2w (w2w (x >>> 8) : word8)) ||
-    (simd_pair_sum n (x >>> 16) (acc >>> 16) << 16)
-End
-
-Definition simd_binary_value_def:
-  simd_binary_value Add4S x y = simd_add32 4 x y ∧
-  simd_binary_value Add2D x y = simd_add64 x y ∧
-  simd_binary_value Cmeq16B x y = simd_cmeq8 16 x y ∧
-  simd_binary_value Eor16B x y = x ?? y ∧
-  simd_binary_value Orr16B x y = x || y
-End
-
 Definition reverse_bytes_def:
   reverse_bytes 0 x = (0w:word64) ∧
   reverse_bytes (SUC n) x =
     (reverse_bytes n (x >>> 8)) || ((x && 255w) << (8*n))
-End
-
-Definition leading_zeros_def:
-  leading_zeros 0 (x:word64) = 0 ∧
-  leading_zeros (SUC n) x = if word_bit n x then 0 else SUC (leading_zeros n x)
 End
 
 (* Reverse the bytes of each of the low k groups of the given byte width. *)
@@ -1187,17 +1136,6 @@ Definition bit_op_value_def:
   bit_op_value sf Rev32 x = reverse_groups 4 2 x
 End
 
-Definition simd_count_bytes_def:
-  simd_count_bytes 0 (x:word128) = (0w:word128) ∧
-  simd_count_bytes (SUC n) x =
-    n2w (bit_count (w2w x : word8)) || (simd_count_bytes n (x >>> 8) << 8)
-End
-
-Definition simd_sum8_def:
-  simd_sum8 0 (x:word128) = (0w:word8) ∧
-  simd_sum8 (SUC n) x = w2w x + simd_sum8 n (x >>> 8)
-End
-
 Definition simd_table_def:
   simd_table 0 (table:word128) indices old = (0w:word128) ∧
   simd_table (SUC n) table indices old =
@@ -1210,19 +1148,6 @@ End
 Definition simd_ext_def:
   simd_ext bytes (lo:word128) (hi:word128) =
     (lo >>> (8 * bytes)) || (hi << (128 - 8 * bytes))
-End
-
-Definition simd_lane_mask_def:
-  simd_lane_mask bits : word128 = (1w << bits) - 1w
-End
-
-(* Reverse the order of elements within each group. *)
-Definition simd_reverse_def:
-  simd_reverse 0 group width (x:word128) = (0w:word128) ∧
-  simd_reverse (SUC n) group width x =
-    (let i = n DIV group * group + (group - 1 - n MOD group);
-         v = (x >>> (width * i)) && simd_lane_mask width
-     in simd_reverse n group width x || (v << (width * n)))
 End
 
 Definition simd_shift_lane_def:
@@ -1247,23 +1172,6 @@ Definition simd_shift_value_def:
     (let bits = w2n imm; width = if bits < 64 then 32 else 64;
          amount = if op = Shl then bits - width else 2 * width - bits
      in simd_shift_lanes (128 DIV width) op width amount x old)
-End
-
-Definition simd_unary_value_def:
-  simd_unary_value CmeqZero16B x acc = simd_cmeq8 16 x 0w ∧
-  simd_unary_value Uminv16B x acc = (w2w (simd_min8 16 x) : word128) ∧
-  simd_unary_value Addv4S x acc = w2w (simd_sum32 4 x) ∧
-  simd_unary_value Addv8H x acc = w2w (simd_sum16 8 x) ∧
-  simd_unary_value Uaddlp16B x acc = simd_pair_sum 8 x 0w ∧
-  simd_unary_value Uadalp16B x acc = simd_pair_sum 8 x acc ∧
-  simd_unary_value Cnt8B x acc = simd_count_bytes 8 x ∧
-  simd_unary_value Addv8B x acc = w2w (simd_sum8 8 x) ∧
-  simd_unary_value Rev16B x acc = simd_reverse 16 2 8 x ∧
-  simd_unary_value Rev32B x acc = simd_reverse 16 4 8 x ∧
-  simd_unary_value Rev32H x acc = simd_reverse 8 2 16 x ∧
-  simd_unary_value Rev64B x acc = simd_reverse 16 8 8 x ∧
-  simd_unary_value Rev64H x acc = simd_reverse 8 4 16 x ∧
-  simd_unary_value Rev64S x acc = simd_reverse 4 2 32 x
 End
 
 Definition simd_extract_def:
@@ -1388,12 +1296,17 @@ Definition execute_with_def:
   execute_with ops (SimdImm q op cmode imm d) s =
     Next (advance (s with vregs := ops.put_vec d
       (simd_imm_value q op cmode imm (ops.get_vec s.vregs d)) s.vregs)) ∧
-  execute_with ops (SimdBinary op d n m) s =
+  execute_with ops (SimdThreeSame scalar q u size opc d n m) s =
     Next (advance (s with vregs := ops.put_vec d
-      (simd_binary_value op (ops.get_vec s.vregs n) (ops.get_vec s.vregs m)) s.vregs)) ∧
-  execute_with ops (SimdUnary op d n) s =
+      (three_same_value scalar q u size opc (ops.get_vec s.vregs n) (ops.get_vec s.vregs m)
+         (ops.get_vec s.vregs d)) s.vregs)) ∧
+  execute_with ops (SimdTwoMisc scalar q u size opc d n) s =
     Next (advance (s with vregs := ops.put_vec d
-      (simd_unary_value op (ops.get_vec s.vregs n) (ops.get_vec s.vregs d)) s.vregs)) ∧
+      (two_misc_value scalar q u size opc (ops.get_vec s.vregs n) (ops.get_vec s.vregs d))
+      s.vregs)) ∧
+  execute_with ops (SimdAcross scalar q u size opc d n) s =
+    Next (advance (s with vregs := ops.put_vec d
+      (across_value q u size opc (ops.get_vec s.vregs n)) s.vregs)) ∧
   execute_with ops (Crc32 castagnoli size d n m) s =
     Next (advance (set_gpr ops d
       (w2w (crc32_value castagnoli size (w2w (gpr ops s n)) (gpr ops s m))) s)) ∧

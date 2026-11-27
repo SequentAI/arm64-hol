@@ -20,7 +20,7 @@ extern const unsigned char ins_adr[], ins_adr_back[], ins_adrp[], ins_adrp_back[
     X(stpq, 0, 0, 0, 0) X(stpx, 0, 0, 0, 0) X(movi, -1, 0, 0, 0) X(nop, -1, 0, 0, 0) X(stpx_regs, 0, 0, 0, 0) X(stpx_zero, 0, 0, 0, 0) \
     X(addsp, -1, 0, 0, 0) X(ldrb_sp, -1, 0, 0, 0) X(ldpq_pos, 1, 0, 0, 0) X(stpq_neg, 0, 0, 0, 0) \
     SCALAR_CASES(X) SIMD_CASES(X) CCMP_FALLBACK_CASES(X) X(br, -1, 0, 0, 0) X(blr, -1, 0, 0, 0) PERMUTE_CASES(X) \
-    CRC_CASES(X) CRYPTO_SIMD_CASES(X) STRUCTURE_CASES(X)
+    CRC_CASES(X) CRYPTO_SIMD_CASES(X) STRUCTURE_CASES(X) INTEGER_SIMD_CASES(X)
 #define DECLARE(name, pointer_reg, indexed, stack, vector_base) extern void case_##name(void);
 CASES(DECLARE)
 #define CASE_ID(name, pointer_reg, indexed, stack, vector_base) Case_##name,
@@ -94,6 +94,33 @@ static void set_aes_example(state *s, enum case_id id)
     }
 }
 
+static int integer_case(enum case_id id)
+{
+    switch (id) {
+#define INTEGER_ID(name, pointer_reg, indexed, stack, vector_base) case Case_##name:
+    INTEGER_SIMD_CASES(INTEGER_ID)
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+/* Every lane width sees zero, -1 and its signed extremes in V28-V30 (vector
+   words 0-5), with equal operands, saturating sums and differences, and
+   small shift counts in the low byte of each lane. */
+static void set_integer_edges(state *s, size_t n)
+{
+    const uint64_t a[2] = {UINT64_C(0x8000000000000000), UINT64_C(0x7fffffffffffffff)};
+    const uint64_t b[2] = {UINT64_C(0x7fffffffffffffff), UINT64_C(0x0000000000000001)};
+    const uint64_t shifts[2] = {UINT64_C(0xc0e0f0f8fc3f1f01), UINT64_C(0x0f07ff4080020300)};
+    const uint64_t *operands[4][3] = {
+        {b, a, a}, {a, a, b}, {b, a, shifts}, {a, b, a}};
+    for (size_t r = 0; r < 3; ++r) {
+        s->vectors[2 * r] = operands[n][r][0];
+        s->vectors[2 * r + 1] = operands[n][r][1];
+    }
+}
+
 static void run_case(const char *name, instruction code, enum case_id id,
                      int pointer_reg, int indexed, int stack, int vector_base)
 {
@@ -122,10 +149,8 @@ static void run_case(const char *name, instruction code, enum case_id id,
             s.vectors[2] = s.vectors[0];
             s.vectors[3] = s.vectors[1];
         }
-        if (id == Case_cmeq_16b && n == 0)
-            s.vectors[3] = s.vectors[1];
-        if (id == Case_cmeq_zero && n == 0)
-            s.vectors[1] &= UINT64_C(0xff00ffff00ffffff);
+        if (integer_case(id) && n < 4)
+            set_integer_edges(&s, n);
         if ((id == Case_tst_byte || id == Case_tst_half) && n == 0)
             s.regs[1] = 0x100;
         if (id == Case_bne)
@@ -197,7 +222,8 @@ static void run_case(const char *name, instruction code, enum case_id id,
                 ? UINT64_C(0x1122334400000000) | (uint32_t)index
                 : index;
         } else if (indexed) {
-            s.regs[2] = id == Case_ldrh_reg
+            // Upper bits catch a truncated index or writeback increment.
+            s.regs[2] = id == Case_ldrh_reg || POST_REGISTER_CASE(id)
                 ? UINT64_C(0x1122334400000000) | n
                 : n;
         }

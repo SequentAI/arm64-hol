@@ -13,9 +13,11 @@ instructions other than pointer authentication, all general-register
 loads, stores and prefetches outside the atomic, exclusive and ordered
 classes, SIMD&FP single-register, pair, literal and structure (`LD1`–`LD4`,
 `ST1`–`ST4`, single-lane and replicate) loads and stores, AdvSIMD
-modified-immediate moves, the AES, SHA-1, SHA-256, SHA-512, SHA-3, SM3 and
-SM4 instructions, and selected AdvSIMD, CRC-32, CRC-32C and polynomial
-multiply instructions. The model gates optional instruction
+modified-immediate moves, the integer AdvSIMD three-same,
+two-register miscellaneous and across-lanes instructions and their scalar
+forms, the AES, SHA-1, SHA-256, SHA-512, SHA-3, SM3 and SM4 instructions,
+and selected other AdvSIMD, CRC-32, CRC-32C and polynomial multiply
+instructions. Saturating instructions do not set FPSR.QC. The model gates optional instruction
 families by feature and faults on unsupported encodings. Fetches require
 readable, executable, non-writable bytes. Stores require readable,
 writable, non-executable bytes. SP-based transfers also require 16-byte
@@ -32,7 +34,7 @@ With Poly/ML and holbuild on PATH:
 ```sh
 holbuild buildhol
 holbuild -j4 build arm64HolTheory
-holbuild check arm64CryptoTheory arm64IsaTheory arm64IsaCvTheory \
+holbuild check arm64CryptoTheory arm64SimdTheory arm64IsaTheory arm64IsaCvTheory \
   arm64CryptoVectorsTheory arm64NativeCasesTheory arm64NativeTheory \
   arm64L3Theory arm64HolTheory
 ```
