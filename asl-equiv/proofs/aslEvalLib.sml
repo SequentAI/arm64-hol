@@ -90,8 +90,11 @@ in
     |> (fn c => computeLib.scrub_const c ``num_to_dec_string``)
     |> computeLib.add_thms
          (map (PURE_REWRITE_RULE [arm64AslTheory.update_lambda]) overrides)
-    |> computeLib.add_thms [aslLemmasTheory.FLOOKUP_asl_mem, sumTheory.sum_case_def]
-    |> computeLib.add_thms entry_defs
+    (* The instruction fetched, as arm64-hol's fetch, which evaluation
+       leaves as it is: decode then waits for its encoding. *)
+    |> computeLib.add_thms [aslLemmasTheory.FLOOKUP_asl_mem, sumTheory.sum_case_def,
+                            aslLemmasTheory.fetch_bits, wordsTheory.w2w_id]
+    |> computeLib.add_thms (arm64AslTheory.arm64_asl_next_def :: entry_defs)
     |> computeLib.add_thms [pred_setTheory.IMAGE_INSERT, pred_setTheory.IMAGE_EMPTY,
          pred_setTheory.BIGUNION_INSERT, pred_setTheory.BIGUNION_EMPTY,
          pred_setTheory.UNION_EMPTY, pred_setTheory.INSERT_UNION_EQ]
@@ -139,25 +142,40 @@ in
       val word_facts = List.filter is_word_fact facts
       val hyp = list_mk_conj (map concl word_facts)
       val facts_th = LIST_CONJ word_facts
-      val pre = QCONV (PURE_REWRITE_CONV eqs THENC EXEC THENC guard_conv) g
+      fun is_bool_lit t = aconv t T orelse aconv t F
+      val pre =
+        QCONV (PURE_REWRITE_CONV eqs THENC EXEC THENC
+               (fn t => if is_bool_lit t then raise UNCHANGED else guard_conv t)) g
       val g' = rhs (concl pre)
+      (* Most guards hold or fail by themselves (bits of an instruction's
+         encoding, say); only the rest need the facts. *)
+      fun prove_alone t = SOME (blastLib.BBLAST_PROVE t)
+                          handle HOL_ERR _ => NONE | UNCHANGED => NONE
+                               | HolSatLib.SAT_cex _ => NONE
       fun prove t = SOME (MP (blastLib.BBLAST_PROVE (mk_imp (hyp, t))) facts_th)
                     handle HOL_ERR _ => NONE | UNCHANGED => NONE
+                         | HolSatLib.SAT_cex _ => NONE
+      fun first [] = NONE
+        | first (f :: fs) = case f () of NONE => first fs | r => r
     in
       if aconv g' T orelse aconv g' F then SOME pre
       else
-        case prove g' of
-          SOME th => SOME (TRANS pre (EQT_INTRO th))
-        | NONE => Option.map (fn th => TRANS pre (EQF_INTRO th)) (prove (mk_neg g'))
+        first [
+          fn () => Option.map (fn th => TRANS pre (EQT_INTRO th)) (prove_alone g'),
+          fn () => Option.map (fn th => TRANS pre (EQF_INTRO th)) (prove_alone (mk_neg g')),
+          fn () => Option.map (fn th => TRANS pre (EQT_INTRO th)) (prove g'),
+          fn () => Option.map (fn th => TRANS pre (EQF_INTRO th)) (prove (mk_neg g'))]
     end
     handle HOL_ERR _ => NONE
 
   (* Evaluates an execution of the specification on a state, deciding each
-     conditional it gets stuck on from the facts. *)
+     conditional it gets stuck on from the facts, and, where none can be
+     decided, rewriting with the equations rws (the state's memory and PC
+     as arm64-hol's, say) and evaluating on. *)
   val trace = ref false
-  fun EXEC_WITH facts tm =
+  fun EXEC_WITH_RW facts rws tm =
     let
-      val globals = free_varsl (tm :: map concl facts)
+      val globals = free_varsl (tm :: map concl (facts @ rws))
       fun closed g = List.all (fn v => tmem v globals) (free_vars g)
       (* The guards evaluation is stuck on: those of conditionals outside
          any binder (the code under a binder has not been reached yet). *)
@@ -170,35 +188,78 @@ in
       fun first_decided [] = NONE
         | first_decided (g :: gs) =
             (case decide facts g of NONE => first_decided gs | d => d)
-      fun loop th =
+      fun continue th conv =
+        case total (CONV_RULE (RAND_CONV conv)) th of
+          SOME th' => if aconv (rhs (concl th')) (rhs (concl th)) then th
+                      else loop th'
+        | NONE => th
+      and loop th =
+        case total (CONV_RULE (RAND_CONV (QCHANGED_CONV (PURE_REWRITE_CONV rws)))) th of
+          SOME th' =>
+            (if !trace then
+               print ("EXEC rewriting; size " ^
+                      Int.toString (term_size (rhs (concl th))) ^ "\n")
+             else ();
+             loop (CONV_RULE (RAND_CONV (QCONV EXEC)) th'))
+        | NONE =>
         case first_decided (guards (rhs (concl th))) of
           NONE => th
         | SOME d =>
             (if !trace then
-               (print ("EXEC decided " ^ term_to_string (lhs (concl d)) ^ " = " ^
-                       term_to_string (rhs (concl d)) ^ "; size " ^
-                       Int.toString (term_size (rhs (concl th))) ^ "\n"))
+               print ("EXEC decided " ^ term_to_string (lhs (concl d)) ^ " = " ^
+                      term_to_string (rhs (concl d)) ^ "; size " ^
+                      Int.toString (term_size (rhs (concl th))) ^ "\n")
              else ();
-            (case total (CONV_RULE (RAND_CONV
-                           (QCONV (PURE_ONCE_REWRITE_CONV [d] THENC EXEC)))) th of
-               SOME th' => if aconv (rhs (concl th')) (rhs (concl th)) then th
-                           else loop th'
-             | NONE => th))
+             continue th (QCONV (PURE_ONCE_REWRITE_CONV [d] THENC EXEC)))
     in
-      loop (EXEC tm)
+      loop (QCONV EXEC tm)
     end
+  fun EXEC_WITH facts tm = EXEC_WITH_RW facts [] tm
 
-  (* Evaluates the left-hand side of the goal with the assumptions as facts:
-     arm64_asl_ok split into the conditions it states, the others as they
-     are. *)
+  (* Facts from assumptions: arm64_asl_ok and state_rel split into the
+     conditions they state, evaluated as the specification's registers are;
+     other assumptions as they are. *)
   val ok_facts =
     facts_of [arm64AslTheory.arm64_asl_ok_def, aslLemmasTheory.asl_features_eq]
+  (* Equations evaluated on each side, so that word equations stay
+     equations. *)
+  fun rel_facts th =
+    th |> PURE_REWRITE_RULE [arm64AslTheory.state_rel_def,
+                             arm64AslTheory.flag_rel_def, LET_THM]
+       |> BETA_RULE
+       |> CONJUNCTS
+       |> map (fn c => if is_eq (concl c) then CONV_RULE (BINOP_CONV (QCONV EXEC)) c else c)
+  fun is_app c th = same_const (fst (strip_comb (concl th))) c
+                    handle HOL_ERR _ => false
   fun assum_facts th =
-    if same_const (fst (strip_comb (concl th))) ``arm64_asl_ok`` then ok_facts th
-    else [th]
-  val EXEC_TAC =
-    ASSUM_LIST (fn ths =>
-      CONV_TAC (LHS_CONV (EXEC_WITH (List.concat (map assum_facts ths)))))
+    if is_app ``arm64_asl_ok`` th then (ok_facts th, [])
+    else if is_app ``state_rel`` th then
+      let val fs = rel_facts th in (fs, List.filter (is_eq o concl) fs) end
+    else ([th], if is_eq (concl th) then [th] else [])
+  (* Evaluates the first subterm of the goal matching pat, with the
+     assumptions as facts and rewrites, and the extra rewrites rws. *)
+  fun EXEC_AT_TAC pat rws : tactic = fn (asms, g) =>
+    let
+      val t = find_term (can (match_term pat)) g
+      val (fs, eqs) = (List.concat ## List.concat)
+                        (ListPair.unzip (map (assum_facts o ASSUME) asms))
+      val th = EXEC_WITH_RW fs (eqs @ rws) t
+    in
+      PURE_ONCE_REWRITE_TAC [th] (asms, g)
+    end
+  (* Evaluates the left-hand side of the goal. *)
+  val EXEC_TAC : tactic = fn (asms, g) =>
+    EXEC_AT_TAC (lhs g) [] (asms, g)
+  (* Evaluates the right-hand side of the goal, and proves it if both sides
+     are then the same. *)
+  val EXEC_RHS_TAC : tactic = fn (asms, g) =>
+    let
+      val (fs, eqs) = (List.concat ## List.concat)
+                        (ListPair.unzip (map (assum_facts o ASSUME) asms))
+      val th = EXEC_WITH_RW fs eqs (rhs g)
+    in
+      (CONV_TAC (RHS_CONV (K th)) THEN TRY (MATCH_ACCEPT_TAC EQ_REFL)) (asms, g)
+    end
 end
 
 end

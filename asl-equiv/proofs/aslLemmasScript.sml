@@ -267,3 +267,22 @@ QED
 
 (* The feature register as a list of literals, for evaluation. *)
 Theorem asl_features_eq = EVAL ``asl_features``
+
+(* The instruction the specification fetches, as bits of memory. *)
+Theorem fetch_bits:
+    v2w [s.mem (s.pc + 3w) ' 7; s.mem (s.pc + 3w) ' 6; s.mem (s.pc + 3w) ' 5;
+         s.mem (s.pc + 3w) ' 4; s.mem (s.pc + 3w) ' 3; s.mem (s.pc + 3w) ' 2;
+         s.mem (s.pc + 3w) ' 1; s.mem (s.pc + 3w) ' 0; s.mem (s.pc + 2w) ' 7;
+         s.mem (s.pc + 2w) ' 6; s.mem (s.pc + 2w) ' 5; s.mem (s.pc + 2w) ' 4;
+         s.mem (s.pc + 2w) ' 3; s.mem (s.pc + 2w) ' 2; s.mem (s.pc + 2w) ' 1;
+         s.mem (s.pc + 2w) ' 0; s.mem (s.pc + 1w) ' 7; s.mem (s.pc + 1w) ' 6;
+         s.mem (s.pc + 1w) ' 5; s.mem (s.pc + 1w) ' 4; s.mem (s.pc + 1w) ' 3;
+         s.mem (s.pc + 1w) ' 2; s.mem (s.pc + 1w) ' 1; s.mem (s.pc + 1w) ' 0;
+         s.mem s.pc ' 7; s.mem s.pc ' 6; s.mem s.pc ' 5; s.mem s.pc ' 4;
+         s.mem s.pc ' 3; s.mem s.pc ' 2; s.mem s.pc ' 1; s.mem s.pc ' 0] : word32 =
+    fetch functional_storage s
+Proof
+  simp[arm64IsaTheory.fetch_def, numLib.SUC_RULE arm64IsaTheory.read_bytes_def,
+       arm64IsaTheory.functional_storage_def] >>
+  blastLib.BBLAST_TAC
+QED
