@@ -929,14 +929,18 @@ def add_probes(clauses: list[Clause], by_group, interp: Interp) -> dict[tuple[st
             # Include nonzero operands and Rd = 31 as well as all-zero registers.
             operands = (1 << 10) if form == "immediate" else (3 << 16)
             operands |= (2 << 5) | 31
-            for fields in (*options, options[0] | operands):
+            for fields in (*options, *(option | operands for option in options)):
                 word = clause.value | (sf << 31) | fields
                 status, owner = sail_decode(word, clauses, by_group, interp)
                 if status != "valid" or owner != clause:
                     raise SystemExit(f"Sail rejected ADD probe {word:08x}: {status}")
                 probes[form, sf].append((word, owner))
-    if set(probes) != {(form, sf) for form in ADD_OPTIONS for sf in (0, 1)}:
-        raise SystemExit("Sail inventory is missing an ADD width or form")
+    for form in ADD_OPTIONS:
+        for sf in (0, 1):
+            # Bits 30 and 29 select add/subtract and whether to set NZCV.
+            variants = {(word >> 29) & 3 for word, _ in probes[form, sf]}
+            if variants != {0, 1, 2, 3}:
+                raise SystemExit(f"Sail inventory is missing ADD variants for {form}, sf={sf}")
     return dict(probes)
 
 
