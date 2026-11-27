@@ -970,6 +970,36 @@ Proof
   EVAL_TAC
 QED
 
+Definition a64_decode_coverage_variants_5c_def:
+  a64_decode_coverage_variants_5c = [
+     (0x39400000w, 15w); (0x79400000w, 15w);
+     (0xb9400000w, 15w); (0xf9400000w, 15w);
+     (0x38000041w, 15w); (0x38400041w, 15w);
+     (0x38000c41w, 15w); (0x38400c41w, 15w)]
+End
+
+Theorem a64_decode_coverage_variants_5c_decode_encode:
+  EVERY (λ(w,t). case decode armv9_4 w of NONE => F | SOME i => coverage_tag i = t ∧ encode i = SOME w)
+    a64_decode_coverage_variants_5c
+Proof
+  EVAL_TAC
+QED
+
+Definition a64_decode_coverage_variants_5d_def:
+  a64_decode_coverage_variants_5d = [
+     (0x38001441w, 15w); (0x78401441w, 15w);
+     (0xb8401441w, 15w); (0xf8401441w, 15w);
+     (0x29400440w, 17w); (0x29800440w, 17w);
+     (0x28c00440w, 17w); (0x29c00440w, 17w)]
+End
+
+Theorem a64_decode_coverage_variants_5d_decode_encode:
+  EVERY (λ(w,t). case decode armv9_4 w of NONE => F | SOME i => coverage_tag i = t ∧ encode i = SOME w)
+    a64_decode_coverage_variants_5d
+Proof
+  EVAL_TAC
+QED
+
 
 (* Valid architectural encodings intentionally unimplemented by arm64Isa. *)
 Definition a64_decode_unimplemented_probes_1_def:
@@ -1141,6 +1171,21 @@ End
 
 Theorem a64_decode_unimplemented_probes_9_none:
   EVERY (λw. decode armv9_4 w = NONE) a64_decode_unimplemented_probes_9
+Proof
+  EVAL_TAC
+QED
+
+Definition a64_decode_unimplemented_probes_10_def:
+  a64_decode_unimplemented_probes_10 = [
+     (0x92800000w); (0xf2800000w);
+     (0x3a400000w); (0x3a400800w);
+     (0x4e004000w); (0x4e006000w);
+     (0x2e200000w); (0x0e204000w);
+     (0x5e001000w); (0x5e002000w); (0x5e003000w); (0x5e005000w)]
+End
+
+Theorem a64_decode_unimplemented_probes_10_none:
+  EVERY (λw. decode armv9_4 w = NONE) a64_decode_unimplemented_probes_10
 Proof
   EVAL_TAC
 QED

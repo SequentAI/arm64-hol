@@ -65,7 +65,7 @@ inventory. It covers data-processing immediate/register, branches and EL0
 system, loads/stores, and AdvSIMD/crypto forms. Each row records explicit
 masks, opcodes or encoding partitions, decode/encode and execution evidence,
 and native, L3, universal, and optional C-contract evidence separately. The
-145-form denominator does not depend on generated compiler bytes.
+157-form denominator does not depend on generated compiler bytes.
 
 ```sh
 python3 tools/a64_coverage.py --check --accept-add

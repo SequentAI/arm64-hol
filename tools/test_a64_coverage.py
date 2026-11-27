@@ -52,6 +52,10 @@ class A64CoverageTests(unittest.TestCase):
                          0x5AC00400, 0xDAC00400, 0xD4200000, 0x6E228420,
                          0x4E228420, 0x4E628420)
         ))
+        self.assertTrue(all(
+            sum(_encoding_matches(form, word) for form in INVENTORY) == 1
+            for form in INVENTORY for word in _probe_words(form)
+        ))
         unscaled = next(form for form in INVENTORY if form.form_id == "load-store.single-immediate-unscaled")
         pair = next(form for form in INVENTORY if form.form_id == "load-store.pair")
         self.assertFalse(_encoding_matches(unscaled, 0x38000820))
@@ -71,6 +75,8 @@ class A64CoverageTests(unittest.TestCase):
         self.assertFalse(_encoding_matches(extended_x, 0x8B201400))
         move_wide = next(row for row in report["rows"] if row["form_id"] == "dp-imm.move-wide-zero.w")
         self.assertFalse(_encoding_matches(next(form for form in INVENTORY if form.form_id == "dp-imm.move-wide-zero.w"), 0x52C00000))
+        self.assertFalse(_encoding_matches(next(form for form in INVENTORY if form.form_id == "dp-imm.move-wide-not.w"), 0x12C00000))
+        self.assertFalse(_encoding_matches(next(form for form in INVENTORY if form.form_id == "dp-imm.move-wide-keep.w"), 0x72C00000))
         self.assertFalse(move_wide["evidence"]["universal_sources"])
         self.assertIn("arm64IsaTheory.encode_of_decode", move_wide["evidence"]["definition_sources"])
         literal_row = next(row for row in report["rows"] if row["form_id"] == "load-store.literal")
@@ -93,21 +99,21 @@ class A64CoverageTests(unittest.TestCase):
         add_rows = [row for row in baseline["rows"] if row["constructor"] in {"AddImm", "AddShift", "AddExtend", "AddCarry"}]
         self.assertEqual(len(add_rows), 8)
         self.assertTrue(all(row["status"] == "implemented" for row in add_rows))
-        hidden = "dp-imm.addsub-immediate.w"
-        regression = _coverage_with_marker(ROOT, hidden)
-        self.assertEqual(
-            regression["summary"]["architectural_total"],
-            baseline["summary"]["architectural_total"],
-        )
-        row = next(item for item in regression["rows"] if item["form_id"] == hidden)
-        self.assertNotEqual(row["status"], "implemented")
         baseline_missing = {
             item["form_id"] for item in baseline["rows"] if item["status"] != "implemented"
         }
-        missing = {
-            item["form_id"] for item in regression["rows"] if item["status"] != "implemented"
-        }
-        self.assertEqual(missing, baseline_missing | {hidden})
+        for hidden in sorted(row["form_id"] for row in add_rows):
+            regression = _coverage_with_marker(ROOT, hidden)
+            self.assertEqual(
+                regression["summary"]["architectural_total"],
+                baseline["summary"]["architectural_total"],
+            )
+            row = next(item for item in regression["rows"] if item["form_id"] == hidden)
+            self.assertNotEqual(row["status"], "implemented")
+            missing = {
+                item["form_id"] for item in regression["rows"] if item["status"] != "implemented"
+            }
+            self.assertEqual(missing, baseline_missing | {hidden})
 
     def test_valid_unimplemented_forms_are_reported(self):
         report = coverage(ROOT)
@@ -136,10 +142,10 @@ class A64CoverageTests(unittest.TestCase):
             "dp-reg.conditional-select": 8,
             "dp-reg.multiply-add": 4,
             "dp-reg.divide": 4,
-            "load-store.single-immediate-scaled": 7,
-            "load-store.single-immediate-unscaled": 4,
+            "load-store.single-immediate-scaled": 8,
+            "load-store.single-immediate-unscaled": 9,
             "load-store.single-register": 4,
-            "load-store.pair": 2,
+            "load-store.pair": 6,
             "dp-reg.variable-shift": 8,
             "dp-imm.bitfield": 4,
             "dp-imm.extract": 2,
