@@ -2,7 +2,7 @@
 """Measure arm64-hol's A64 decoder against Arm's Armv9.4-A Sail decoder.
 
 The inventory is every A64 encoding clause (`__DecodeA64_*`) in
-`arm-v9.4-a/src/instrs64.sail` of rems-project/sail-arm. Each clause is
+`arm-v9.4-a/src/instrs64{,_sve,_sme}.sail` of rems-project/sail-arm. Each clause is
 sampled: its fixed bits are kept and its operand bits filled with seeded
 random values. A small interpreter for the subset of Sail that the
 `decode_*` functions use classifies each sample as Sail decodes it:
@@ -15,7 +15,11 @@ random values. A small interpreter for the subset of Sail that the
               such as the per-register EL0 access rules of system registers
 
 The checks at the start of an `execute_*` function run up to the first
-statement the interpreter cannot evaluate, with `PSTATE.EL` = EL0.
+statement the interpreter cannot evaluate, with `PSTATE.EL` = EL0. A call
+there to a helper elsewhere in the model (`v8_base.sail`) that can throw
+`Error_Undefined` makes the sample unknown, except checks that depend on
+how higher exception levels configure EL0 (FP, AdvSIMD, SVE, MOPS and
+pointer-authentication enables), which count as passing like the features.
 Every optional feature (`Have*()`) counts as implemented; each clause
 lists the feature predicates its decoder consults. The same words are
 decoded by `decode armv9_4` in HOL4 (`cv_eval`, through `holbuild run`).
@@ -23,7 +27,7 @@ A clause is covered when HOL4 decodes all its valid samples, and
 unsampled when no sample is valid. Any sample HOL4 decodes but Sail
 rejects is listed as a mismatch.
 
-Usage: a64_coverage.py [--sail instrs64.sail] [--samples N] [--json FILE]
+Usage: a64_coverage.py [--sail DIR] [--samples N] [--json FILE]
 """
 from __future__ import annotations
 
@@ -42,7 +46,17 @@ from pathlib import Path
 
 SAIL_COMMIT = "329d5009fe33afcf6fa2cda0e52c1c1ed3d8a1d8"
 SAIL_URL = ("https://raw.githubusercontent.com/rems-project/sail-arm/"
-            f"{SAIL_COMMIT}/arm-v9.4-a/src/instrs64.sail")
+            f"{SAIL_COMMIT}/arm-v9.4-a/src/")
+SAIL_FILES = ("instrs64.sail", "instrs64_sve.sail", "instrs64_sme.sail", "v8_base.sail")
+
+# Helpers whose UNDEFINED outcome depends on how higher exception levels
+# configure EL0 (CPACR_EL1, SCTLR_EL1, SCR_EL3 and the like) rather than on
+# the exception level itself; they count as passing, like the features.
+ASSUMED_ENABLED = {"CheckFPEnabled64", "CheckFPAdvSIMDEnabled64", "AArch64_CheckFPEnabled",
+                   "AArch64_CheckFPAdvSIMDEnabled", "CheckSVEEnabled",
+                   "CheckNonStreamingSVEEnabled", "CheckOriginalSVEEnabled",
+                   "CheckMOPSEnabled", "AddPACDA", "AddPACDB", "AddPACGA", "AddPACIA",
+                   "AddPACIB", "AuthDA", "AuthDB", "AuthIA", "AuthIB"}
 
 # Instruction classes (the `aarch64_instrs_<class>` suffix of each decode
 # function) grouped into the profile areas the report is split by. The
@@ -185,6 +199,8 @@ class Parser:
         depth = 0
         while True:
             tok = self.peek()
+            if not tok:
+                raise SyntaxError("unterminated type")
             if depth == 0 and tok in stops:
                 return
             if tok in "({[":
@@ -480,6 +496,8 @@ def builtin(name: str, args: list):
         return decode_bit_masks(*args)
     if name in ("Halted",):
         return False
+    if name in ("CurrentVL_read", "CurrentSVL_read"):
+        return 128  # the smallest SVE and SME vector lengths
     return OPAQUE
 
 
@@ -488,8 +506,9 @@ VALUE_BUILTINS = {"UInt", "SInt", "DIV", "Slice", "ZeroExtend", "SignExtend", "L
 
 
 class Interp:
-    def __init__(self, functions: dict[str, tuple[list[str], tuple]]):
+    def __init__(self, functions: dict[str, tuple[list[str], tuple]], undefined: set[str]):
         self.functions = functions
+        self.undefined = undefined
 
     def run(self, node, env: dict):
         kind = node[0]
@@ -572,6 +591,8 @@ class Interp:
                 raise Valid
             if any(isinstance(a, str) for a in args) and name in VALUE_BUILTINS:
                 return OPAQUE
+            if name in self.undefined and name not in VALUE_BUILTINS:
+                raise Unmodelled
             return builtin(name, args)
         raise Unknown(kind)
 
@@ -689,11 +710,31 @@ def load_inventory(source: str):
             exclude = (emask << lo, evalue << lo)
         decoder = re.findall(r"(decode_\w+)\(", body)[-1]
         mnemonic, _, instr_class = decoder[len("decode_"):].partition("_aarch64_instrs_")
+        area = group if group in ("SVE", "SME") else area_of(instr_class)
         ast = Parser(tokenize(body)).block()
         features = sorted(set(FEATURE.findall(guard + body + texts.get(decoder, ""))))
         clauses.append(Clause(index, group, int(see), mask, value, exclude, decoder,
-                              mnemonic, instr_class, area_of(instr_class), features, ast))
+                              mnemonic, instr_class, area, features, ast))
     return clauses, functions
+
+
+HELPER = re.compile(r"\nfunction (\w+)[^\n]*?= (\{.*?\n\})", re.S)
+CALL = re.compile(r"\b([A-Za-z_]\w*)\(")
+
+
+def undefined_helpers(source: str) -> set[str]:
+    """Functions outside decode_*/execute_* that can throw Error_Undefined."""
+    bodies = defaultdict(str)
+    for name, body in HELPER.findall(source):
+        if not name.startswith(("decode_", "execute_")):
+            bodies[name] += body
+    calls = {name: set(CALL.findall(body)) for name, body in bodies.items()}
+    undefined = {name for name, body in bodies.items() if "Error_Undefined" in body}
+    while True:
+        more = {name for name, called in calls.items() if called & undefined} - undefined
+        if not more:
+            return undefined - ASSUMED_ENABLED
+        undefined |= more
 
 
 def top_group(word: int) -> str:
@@ -802,22 +843,26 @@ def hol_decodes(words: list[int], repo: Path) -> list[bool]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("--sail", type=Path, help="instrs64.sail (default: fetch the pinned file)")
+    parser.add_argument("--sail", type=Path,
+                        help="arm-v9.4-a/src directory (default: fetch the pinned files)")
     parser.add_argument("--samples", type=int, default=64, help="random words per clause")
     parser.add_argument("--json", type=Path, help="write the per-clause report here")
     args = parser.parse_args()
 
-    if args.sail:
-        source = args.sail.read_text()
-    else:
-        with urllib.request.urlopen(SAIL_URL) as response:
-            source = response.read().decode()
+    texts = []
+    for name in SAIL_FILES:
+        if args.sail:
+            texts.append((args.sail / name).read_text())
+        else:
+            with urllib.request.urlopen(SAIL_URL + name) as response:
+                texts.append(response.read().decode())
+    source = "\n".join(texts)
     digest = hashlib.sha256(source.encode()).hexdigest()
     clauses, functions = load_inventory(source)
     by_group = defaultdict(list)
     for clause in clauses:
         by_group[clause.group].append(clause)
-    interp = Interp(functions)
+    interp = Interp(functions, undefined_helpers(source))
 
     rng = random.Random(0)
     rows = []
@@ -856,11 +901,11 @@ def main() -> None:
     for row in report:
         totals[row["area"]][row["state"]] += 1
     origin = f"{args.sail} (sha256 {digest[:12]})" if args.sail else f"@ {SAIL_COMMIT[:12]}"
-    print(f"Sail arm-v9.4-a instrs64.sail {origin}: {len(clauses)} A64 clauses, "
+    print(f"Sail arm-v9.4-a {origin}: {len(clauses)} A64 clauses, "
           f"{len(rows)} sampled words")
     states = ("covered", "partial", "missing", "unsampled")
     print(f"{'area':22} {'clauses':>7}" + "".join(f" {s:>9}" for s in states))
-    for area, _ in AREAS + [("other", ())]:
+    for area, _ in AREAS + [("SVE", ()), ("SME", ()), ("other", ())]:
         t = totals.get(area)
         if t:
             print(f"{area:22} {sum(t.values()):7}" + "".join(f" {t[s]:9}" for s in states))

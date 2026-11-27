@@ -221,7 +221,7 @@ SCALAR_PROBES = [
     ("ldr_lit_w", "LoadLiteral F 0w 1w 0x7fff5w", "ldr w1,8b+4", -1, "literal"),
     ("ldr_lit_x", "LoadLiteral F 1w 1w 5w", "ldr x1,9f+8", -1, "literal"),
     ("ldrsw_lit", "LoadLiteral F 2w 1w 0x7fff6w", "ldrsw x1,8b+8", -1, "literal"),
-    ("ldrsw_lit_pos", "LoadLiteral F 2w 1w 4w", "ldrsw x1,9f+4", -1, "literal"),
+    ("ldrsw_lit_pos", "LoadLiteral F 2w 1w 6w", "ldrsw x1,9f+12", -1, "literal"),
     ("prfm_lit", "LoadLiteral F 3w 0w 3w", "prfm pldl1keep,9f", -1, "literal"),
     ("ldrsb_x", "MemImm F 2w 0w 1w 0w (Scaled 1w)", "ldrsb x1,[x0,#1]", 0, ""),
     ("ldrsb_w_post", "MemImm F 3w 0w 1w 0w (Unscaled PostIndex 1w)", "ldrsb w1,[x0],#1", 0, ""),
@@ -281,7 +281,7 @@ SCALAR_ALIASES = {
     "ldr_lit_w": ("ldr w1,-44",),
     "ldr_lit_x": ("ldr x1,20",),
     "ldrsw_lit": ("ldrsw x1,-40",),
-    "ldrsw_lit_pos": ("ldrsw x1,16",),
+    "ldrsw_lit_pos": ("ldrsw x1,24",),
     "prfm_lit": ("prfm pldl1keep,12",),
 }
 
