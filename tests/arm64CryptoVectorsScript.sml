@@ -42,12 +42,12 @@ Definition sm4_ck_def:
             (sm4_ck_word (4 * i + 2)) (sm4_ck_word (4 * i + 3))
 End
 
-(* Each step derives four round keys with SM4EKEY V1.4S, V1.4S, V2.4S, then
+(* Each step derives four round keys with SM4EKEY V3.4S, V1.4S, V2.4S, then
    runs four rounds with SM4E V0.4S, V1.4S. *)
 Definition sm4_run_def:
   sm4_run 0 k x = x ∧
   sm4_run (SUC n) k x =
-    let k' = run_word 0xce62c821w [(1,k); (2,sm4_ck (7 - n))] 1 in
+    let k' = run_word 0xce62c823w [(1,k); (2,sm4_ck (7 - n))] 3 in
       sm4_run n k' (run_word 0xcec08420w [(0,x); (1,k')] 0)
 End
 
