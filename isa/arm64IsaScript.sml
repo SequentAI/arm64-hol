@@ -357,11 +357,7 @@ Definition simd_copy_ok_def:
     let sz = w2n (simd_copy_size imm5) in
       (word_bit 0 imm5 ∨ word_bit 1 imm5 ∨ word_bit 2 imm5 ∨ word_bit 3 imm5) ∧
       if scalar then q ∧ ¬op ∧ imm4 = 0w ∧ sz < 4
-      else if op then
-        q ∧ sz < 4 ∧
-        (sz = 0 ∨ (sz = 1 ∧ ¬word_bit 0 imm4) ∨
-         (sz = 2 ∧ ¬word_bit 0 imm4 ∧ ¬word_bit 1 imm4) ∨
-         (sz = 3 ∧ ¬word_bit 0 imm4 ∧ ¬word_bit 1 imm4 ∧ ¬word_bit 2 imm4))
+      else if op then q ∧ sz < 4
       else if imm4 = 0w then sz < 3 ∨ q
       else if imm4 = 1w then sz < 3 ∨ q
       else if imm4 = 3w then q ∧ sz < 4
