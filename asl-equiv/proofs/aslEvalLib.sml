@@ -12,13 +12,24 @@ open armv9_p32Theory arm64AslTheory aslLemmasTheory
 
 (* Word equalities left by evaluation recur many times per instruction, so
    their bit-blasting results, failures included, are remembered. *)
+val eq_trace = ref false
 val eq_memo = ref (Redblackmap.mkDict Term.compare : (term, thm option) Redblackmap.dict)
 fun memo_eq_conv t =
   let val r = case Redblackmap.peek (!eq_memo, t) of
                 SOME r => r
               | NONE =>
-                  let val r = SOME (QCHANGED_CONV blastLib.BBLAST_CONV t)
+                  (* Bit-blasting cannot settle integer arithmetic, and can
+                     search for long trying. *)
+                  if can (find_term (fn x => type_of x = intSyntax.int_ty)) t then NONE else
+                  let val () = if !eq_trace then print ("BLAST " ^ term_to_string t ^ "\n") else ()
+                      (* Only decisions: an undecided equation's bit-level
+                         form (carry chains, say) is much bigger. *)
+                      fun decision th =
+                        let val r = rhs (concl th)
+                        in if aconv r T orelse aconv r F then SOME th else NONE end
+                      val r = decision (blastLib.BBLAST_CONV t)
                               handle UNCHANGED => NONE | HOL_ERR _ => NONE
+                      val () = if !eq_trace then print ("BLAST done " ^ (if isSome r then "rewrote" else "no") ^ "\n") else ()
                   in eq_memo := Redblackmap.insert (!eq_memo, t, r); r end
   in case r of SOME th => th | NONE => raise UNCHANGED end
 local
@@ -42,6 +53,8 @@ local
     aslLemmasTheory.AddWithCarry_add_with_carry,
     aslLemmasTheory.read_gpr_eq, aslLemmasTheory.write_gpr_eq,
     aslLemmasTheory.n2w_w2n_add, aslLemmasTheory.bool_of_bitU_eq,
+    aslLemmasTheory.add_vec_word, aslLemmasTheory.add_vec_int_word,
+    aslLemmasTheory.foreachM_rw, sail2_valuesAuxiliaryTheory.index_list_rw,
     sail2_valuesAuxiliaryTheory.bools_of_nat_aux_rw]
   fun head th =
     th |> CONJUNCTS |> hd |> SPEC_ALL |> concl |> lhs |> strip_comb |> fst
@@ -233,11 +246,12 @@ in
       val undecided = ref (HOLset.empty Term.compare)
       fun decide_new g =
         if HOLset.member (!undecided, g) then NONE
-        else case decide facts g of
+        else (if !trace then print (stamp () ^ " EXEC deciding " ^ term_to_string g ^ "\n") else ();
+              decide facts g) |> (fn r => case r of
                NONE => (undecided := HOLset.add (!undecided, g);
                         if !trace then print (stamp () ^ " EXEC undecided " ^ term_to_string g ^ "\n") else ();
                         NONE)
-             | d => d
+             | d => d)
       fun loop th =
         if out_of_time () then th else
         case total (CONV_RULE (RAND_CONV (QCHANGED_CONV (PURE_REWRITE_CONV rws)))) th of

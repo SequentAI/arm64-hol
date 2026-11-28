@@ -282,6 +282,33 @@ Proof
   simp[GSYM wordsTheory.word_add_n2w]
 QED
 
+(* Addresses are sums computed through integers; as words, bit-blasting can
+   decide the guards on them (alignment, say). *)
+Theorem add_vec_word:
+  add_vec (l:α word) r = l + r
+Proof
+  rw[sail2_operators_mwordsTheory.add_vec_def, sail2_valuesTheory.int_of_mword_def,
+     lemTheory.w2ui_def, integerTheory.INT_ADD, integer_wordTheory.i2w_def,
+     wordsTheory.word_add_def]
+QED
+
+Theorem add_vec_int_word:
+  add_vec_int (l:α word) r = l + i2w r
+Proof
+  rw[sail2_operators_mwordsTheory.add_vec_int_def, sail2_operatorsTheory.arith_op_bv_int_def,
+     sail2_valuesTheory.instance_Sail2_values_Bitvector_Machine_word_mword_dict_def,
+     sail2_valuesTheory.int_of_mword_def, lemTheory.w2ui_def, integerTheory.INT_ADD,
+     integer_wordTheory.i2w_def, wordsTheory.word_add_def]
+QED
+
+(* Loops of the specification (over the bytes of an unaligned access, say)
+   by their recursion equation. *)
+Theorem foreachM_rw =
+  fst (Defn.tprove_no_defn
+    ((sail2_monadic_combinatorsTheory.foreachM_def,
+      sail2_monadic_combinatorsTheory.foreachM_ind),
+     WF_REL_TAC `measure (LENGTH o FST)` >> rw[]))
+
 (* Bits of memory are bitU_of_bool of the bits of bytes; reading them back
    gives the bits. *)
 Theorem bool_of_bitU_eq:
