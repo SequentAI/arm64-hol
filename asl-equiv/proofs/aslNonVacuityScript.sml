@@ -21,7 +21,7 @@ End
 Definition witness_pstate_def:
   witness_pstate (s:arm64_state) =
     (ARB:ProcState) with
-      <| ProcState_EL := 0w; ProcState_nRW := 0w; ProcState_SP := 0w;
+      <| ProcState_EL := 0w; ProcState_nRW := 0w; ProcState_SP := 0w; ProcState_IL := 0w;
          ProcState_N := v2w [FST s.nzcv];
          ProcState_Z := v2w [FST (SND s.nzcv)];
          ProcState_C := v2w [FST (SND (SND s.nzcv))];
@@ -65,7 +65,7 @@ QED
 
 Theorem witness_pstate_fields[local]:
   (witness_pstate s).ProcState_EL = 0w ∧ (witness_pstate s).ProcState_nRW = 0w ∧
-  (witness_pstate s).ProcState_SP = 0w ∧
+  (witness_pstate s).ProcState_SP = 0w ∧ (witness_pstate s).ProcState_IL = 0w ∧
   (witness_pstate s).ProcState_N = v2w [FST s.nzcv] ∧
   (witness_pstate s).ProcState_Z = v2w [FST (SND s.nzcv)] ∧
   (witness_pstate s).ProcState_C = v2w [FST (SND (SND s.nzcv))] ∧

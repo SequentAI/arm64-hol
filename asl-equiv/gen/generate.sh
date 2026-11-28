@@ -77,10 +77,10 @@ cmp names.json names2.json
 (cd "$here/lem-lib" && lem -hol -outdir "$work/hol-lib" -auxiliary_level none \
    -lib . -lib "$share/lib/hol" -lib "$share/src/gen_lib" *.lem)
 
-# 4. Adapt and install, replacing the previous export
+# 4. Adapt in the work directory, then install, replacing the previous export
+bash "$here/fix-hol.sh" hol/*Script.sml hol-lib/*Script.sml
+python3 "$here/split/trim_opens.py" hol
+sed -i '/^val _ = new_theory "armv9_/a val _ = HOLFlags.set_trace "TheoryPP.include_html_docs" 0;' hol/armv9_*Script.sml
 rm -f "$model"/*Script.sml
 cp hol/*Script.sml "$model/"
 cp hol-lib/*Script.sml "$here/../lib/sail/"
-bash "$here/fix-hol.sh" "$model"/*Script.sml "$here"/../lib/sail/sail2_{concurrency_interface,monadic_combinators,undefined_concurrency_interface}Script.sml
-python3 "$here/split/trim_opens.py" "$model"
-sed -i '/^val _ = new_theory "armv9_/a val _ = HOLFlags.set_trace "TheoryPP.include_html_docs" 0;' "$model"/armv9_*Script.sml

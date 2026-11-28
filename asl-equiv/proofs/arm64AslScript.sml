@@ -85,14 +85,15 @@ Definition asl_features_def:
 End
 
 (* The system configuration arm64-hol assumes: Non-secure state, MPAM
-   disabled, AArch64 at EL0 on SP_EL0, SIMD and floating-point instructions
+   disabled, AArch64 at EL0 on SP_EL0 with no illegal execution state, SIMD and floating-point instructions
    enabled at EL0, no alignment checking of ordinary accesses, little-endian
    data, no top-byte ignore, not in Debug state (EDSCR.STATUS is
    Non-debug), and no statistical profiling sample in flight. *)
 Definition arm64_asl_config_def:
   arm64_asl_config (asl:regstate sequential_state) ⇔
     (let p = PSTATE_ref.read_from asl.regstate in
-     p.ProcState_EL = 0w ∧ p.ProcState_nRW = 0w ∧ p.ProcState_SP = 0w) ∧
+     p.ProcState_EL = 0w ∧ p.ProcState_nRW = 0w ∧ p.ProcState_SP = 0w ∧
+     p.ProcState_IL = 0w) ∧
     (let sctlr = (SCTLR_EL1_ref.read_from asl.regstate).SCTLR_EL1_Type_bits in
      ¬word_bit 1 sctlr ∧ ¬word_bit 24 sctlr) ∧
     (let cpacr = (CPACR_EL1_ref.read_from asl.regstate).CPACR_EL1_Type_bits in

@@ -33,7 +33,7 @@ holbuild check armv9_typesTheory armv9_p{1..32}Theory arm64AslTheory aslLemmasTh
   that its step, when it doesn't fault, reaches a related state. So an
   instruction `arm64-hol` lacks can't go unnoticed. `aslSim` proves the
   simulation so far, with only the features `arm64-hol` models
-  implemented: NOP, ADD/SUB (immediate), FMOV (general to vector), and
+  implemented: NOP, ADD/SUB (immediate), FMOV (vector to general), and
   64-bit LDR and STR (immediate, unsigned offset) at any address.
   Evaluating one instruction in the specification takes from about 0.3 s
   (ADD) to 8.5 s (LDR), split into proof steps of at most about 2 s.
