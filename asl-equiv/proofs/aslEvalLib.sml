@@ -308,11 +308,18 @@ in
        |> map (fn c => if is_eq (concl c) then CONV_RULE (BINOP_CONV (QCONV EXEC)) c else c)
   fun is_app c th = same_const (fst (strip_comb (concl th))) c
                     handle HOL_ERR _ => false
+  (* The facts of an assumption are the same at every step of a proof. *)
+  val facts_memo = ref (Redblackmap.mkDict Term.compare)
   fun assum_facts th =
-    if is_app ``arm64_asl_ok`` th then (ok_facts th, [])
-    else if is_app ``state_rel`` th then
-      let val fs = rel_facts th in (fs, List.filter (is_eq o concl) fs) end
-    else ([th], if is_eq (concl th) then [th] else [])
+    case Redblackmap.peek (!facts_memo, concl th) of
+      SOME r => r
+    | NONE =>
+      let val r =
+            if is_app ``arm64_asl_ok`` th then (ok_facts th, [])
+            else if is_app ``state_rel`` th then
+              let val fs = rel_facts th in (fs, List.filter (is_eq o concl) fs) end
+            else ([th], if is_eq (concl th) then [th] else [])
+      in facts_memo := Redblackmap.insert (!facts_memo, concl th, r); r end
   (* Evaluates the first subterm of the goal matching pat, with the
      assumptions as facts and rewrites, and the extra rewrites rws. *)
   fun EXEC_AT_TAC pat rws : tactic = fn (asms, g) =>

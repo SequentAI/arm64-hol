@@ -121,9 +121,8 @@ Proof
   drule_all asl_next_fetch >> disch_then SUBST1_TAC >>
   imp_res_tac state_rel_gpr >>
   Cases_on `t = 31w` >> Cases_on `n = 31w` >>
-  Cases_on `(2 >< 0) (base_reg functional_storage s n + w2w imm ≪ 3) = (0w:word3)` >>~-
-  ([`ExecuteA64 _`],
-   gvs[arm64IsaTheory.encode_def, arm64IsaTheory.mem_opc_ok_def,
+  Cases_on `(2 >< 0) (base_reg functional_storage s n + w2w imm ≪ 3) = (0w:word3)` >>
+  (gvs[arm64IsaTheory.encode_def, arm64IsaTheory.mem_opc_ok_def,
        arm64IsaTheory.single_encoding_def, arm64IsaTheory.mem_base_def,
        arm64IsaTheory.flag_field_def, arm64IsaTheory.reg_fields_def,
        arm64IsaTheory.insert_field_def, arm64IsaTheory.execute_with_def,
@@ -133,7 +132,8 @@ Proof
        arm64IsaTheory.check_sp_def, arm64IsaTheory.indexed_addr_def] >>
    qpat_x_assum `_ = fetch _ _` (assume_tac o SYM) >>
    qpat_x_assum `_ = Next _` (strip_assume_tac o SIMP_RULE (srw_ss()) [AllCaseEqs()]) >>
-   res_tac >> imp_res_tac sp_offset_aligned >>
+   res_tac >> imp_res_tac sp_offset_aligned) >>~-
+  ([`ExecuteA64 _`],
    aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >>
    aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >>
    aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >>
@@ -146,6 +146,7 @@ Proof
        wordsTheory.EXTRACT_ALL_BITS, arm64IsaTheory.load_extend_def,
        arm64IsaTheory.put_loaded_def, arm64IsaTheory.finish_mem_def,
        arm64IsaTheory.writes_back_def] >>
+   reverse conj_tac >- gvs rel_simps >>
    gvs rel_simps >>
    (* The unaligned read assembles the doubleword byte by byte. *)
    rw[] >>
@@ -165,9 +166,8 @@ Proof
   drule_all asl_next_fetch >> disch_then SUBST1_TAC >>
   imp_res_tac state_rel_gpr >>
   Cases_on `t = 31w` >> Cases_on `n = 31w` >>
-  Cases_on `(2 >< 0) (base_reg functional_storage s n + w2w imm ≪ 3) = (0w:word3)` >>~-
-  ([`ExecuteA64 _`],
-   gvs[arm64IsaTheory.encode_def, arm64IsaTheory.mem_opc_ok_def,
+  Cases_on `(2 >< 0) (base_reg functional_storage s n + w2w imm ≪ 3) = (0w:word3)` >>
+  (gvs[arm64IsaTheory.encode_def, arm64IsaTheory.mem_opc_ok_def,
        arm64IsaTheory.single_encoding_def, arm64IsaTheory.mem_base_def,
        arm64IsaTheory.flag_field_def, arm64IsaTheory.reg_fields_def,
        arm64IsaTheory.insert_field_def, arm64IsaTheory.execute_with_def,
@@ -178,7 +178,8 @@ Proof
        arm64IsaTheory.stored_value_def, arm64IsaTheory.gpr_def] >>
    qpat_x_assum `_ = fetch _ _` (assume_tac o SYM) >>
    qpat_x_assum `_ = Next _` (strip_assume_tac o SIMP_RULE (srw_ss()) [AllCaseEqs()]) >>
-   res_tac >> imp_res_tac sp_offset_aligned >>
+   res_tac >> imp_res_tac sp_offset_aligned) >>~-
+  ([`ExecuteA64 _`],
    aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >>
    aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >>
    aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >>
@@ -189,6 +190,7 @@ Proof
    irule_at (Pos hd) EQ_REFL >>
    gvs[arm64IsaTheory.finish_mem_def, arm64IsaTheory.writes_back_def,
        write_bytes_fields] >>
+   reverse conj_tac >- gvs rel_simps >>
    gvs rel_simps >>
    simp[listTheory.FOLDL, lem_listTheory.list_combine_def, aligned8_w2n,
         integer_wordTheory.i2w_pos, asl_mem_update, bitU_cond_eq,
