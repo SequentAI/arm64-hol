@@ -1002,6 +1002,11 @@ def check_add(repo: Path, clauses: list[Clause], rows, probes, report, add_width
         (copy / "tests").mkdir()
         for script in (repo / "tests").glob("*Script.sml"):
             shutil.copy2(script, copy / "tests" / script.name)
+        # holbuild needs every member directory; the others aren't built here.
+        import tomllib  # Python 3.11+; only this check needs it
+        manifest = tomllib.loads((repo / "holproject.toml").read_text())
+        for member in manifest["build"]["members"]:
+            (copy / member).mkdir(parents=True, exist_ok=True)
         isa = copy / "isa/arm64IsaScript.sml"
         source = isa.read_text()
         if source.count(condition) != 1:

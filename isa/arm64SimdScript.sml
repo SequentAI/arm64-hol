@@ -137,11 +137,15 @@ Definition simd_copy_gpr_def:
 End
 
 (* SatQ: clamp to the unsigned or signed range of esize bits. *)
-Definition saturate_def:
-  saturate unsigned esize (v:int) : word64 =
+Definition saturate_int_def:
+  saturate_int unsigned esize (v:int) =
     let top : int = if unsigned then &(2 ** esize) - 1 else &(2 ** (esize - 1)) - 1;
         bottom : int = if unsigned then 0 else -&(2 ** (esize - 1))
-    in i2w (if top < v then top else if v < bottom then bottom else v)
+    in if top < v then top else if v < bottom then bottom else v
+End
+
+Definition saturate_def:
+  saturate unsigned esize v : word64 = i2w (saturate_int unsigned esize v)
 End
 
 Definition test_mask_def:
@@ -351,4 +355,216 @@ Definition across_value_def:
       if opc = 3w then put_lane (2 * esize) 0 (i2w (lane_sum u esize elements n))
       else if opc = 27w then put_lane esize 0 (i2w (lane_sum F esize elements n))
       else put_lane esize 0 (lane_best u (word_bit 4 opc) esize (elements - 1) n)
+End
+
+Definition shift_imm_size_def:
+  shift_imm_size (immh:word4) : num =
+    if word_bit 3 immh then 64 else if word_bit 2 immh then 32
+    else if word_bit 1 immh then 16 else 8
+End
+
+Definition shift_imm_elem_def:
+  shift_imm_elem u (code:num) esize amount (a:word64) (c:word64) =
+    let x = elem_int u esize a; y = elem_int u esize c;
+        mask : word64 = w2w (simd_lane_mask esize)
+    in if code = 0 then i2w (int_shr x amount)
+       else if code = 2 then i2w (y + int_shr x amount)
+       else if code = 4 then i2w (rshr T x amount)
+       else if code = 6 then i2w (y + rshr T x amount)
+       else if code = 8 then
+         ((a && mask) >>> amount) ||
+         (c && (mask << (esize - amount)))
+       else if code = 10 ∧ ¬u then (a << amount) && mask
+       else if code = 10 then
+         ((a << amount) && mask) ||
+         (c && (mask >>> (esize - amount)))
+       else if code = 12 then saturate T esize (elem_int F esize a * &(2 ** amount))
+       else if code = 14 then saturate u esize (x * &(2 ** amount))
+       else 0w
+End
+
+Definition shift_imm_lanes_def:
+  shift_imm_lanes 0 u (code:num) esize amount n d = (0w:word128) ∧
+  shift_imm_lanes (SUC k) u code esize amount n d =
+    shift_imm_lanes k u code esize amount n d ||
+    put_lane esize k
+      (shift_imm_elem u code esize amount (elem esize k n) (elem esize k d))
+End
+
+Definition shift_narrow_lanes_def:
+  shift_narrow_lanes 0 u (code:num) esize amount n = (0w:word128) ∧
+  shift_narrow_lanes (SUC k) u code esize amount n =
+    let x = elem_int (if code < 18 then ¬u else u) (2 * esize)
+                     (elem (2 * esize) k n);
+        shifted = rshr (ODD code) x amount;
+        r = if code < 18 ∧ ¬u then i2w shifted else saturate u esize shifted
+    in shift_narrow_lanes k u code esize amount n || put_lane esize k r
+End
+
+Definition shift_long_lanes_def:
+  shift_long_lanes 0 u esize amount n = (0w:word128) ∧
+  shift_long_lanes (SUC k) u esize amount n =
+    shift_long_lanes k u esize amount n ||
+    put_lane (2 * esize) k
+      (i2w (elem_int u esize (elem esize k n) * &(2 ** amount)))
+End
+
+Definition shift_imm_value_def:
+  shift_imm_value scalar q u (immh:word4) (immb:word3) (opc:word5)
+      (n:word128) (d:word128) =
+    let code = w2n opc; esize = shift_imm_size immh;
+        imm = 8 * w2n immh + w2n immb;
+        right = 2 * esize - imm; left = imm - esize;
+        bits = if scalar then esize else if q then 128 else 64;
+        normal = bits DIV esize
+    in if code < 16 then
+         shift_imm_lanes normal u code esize
+           (if code = 8 ∨ code = 0 ∨ code = 2 ∨ code = 4 ∨ code = 6
+            then right else left) n d
+       else if code < 20 then
+         let r = shift_narrow_lanes (if scalar then 1 else 64 DIV esize)
+               u code esize right n
+         in if q ∧ ¬scalar then (r << 64) || (d && simd_lane_mask 64) else r
+       else
+         shift_long_lanes (64 DIV esize) u esize left (if q then n >>> 64 else n)
+End
+
+Definition three_diff_elem_def:
+  three_diff_elem u (code:num) esize (a:word64) (b:word64) (c:word64) =
+    let wide = 2 * esize;
+        x = elem_int u (if code = 2 ∨ code = 6 then wide else esize) a;
+        y = elem_int u esize b;
+        z = elem_int u wide c
+    in if code = 0 ∨ code = 2 then i2w (x + y)
+       else if code = 4 ∨ code = 6 then i2w (x - y)
+       else if code = 8 ∨ code = 12 then
+         i2w (rshr u (if code = 8 then &w2n a + &w2n b else &w2n a - &w2n b) esize)
+       else if code = 10 ∨ code = 14 then
+         i2w ((if code = 10 then z else 0) + (if x < y then y - x else x - y))
+       else if code = 16 then i2w (z + x * y)
+       else if code = 20 then i2w (z - x * y)
+       else if code = 24 then i2w (x * y)
+       else
+         let product = saturate_int F wide (2 * x * y) in
+         saturate F wide (if code = 18 then z + product
+                          else if code = 22 then z - product else product)
+End
+
+Definition three_diff_lanes_def:
+  three_diff_lanes 0 u (code:num) esize n m d = (0w:word128) ∧
+  three_diff_lanes (SUC k) u code esize n m d =
+    let wide = 2 * esize;
+        narrow = (code = 8 ∨ code = 12);
+        a = elem (if narrow ∨ code = 2 ∨ code = 6 then wide else esize) k n;
+        b = elem (if narrow then wide else esize) k m
+    in three_diff_lanes k u code esize n m d ||
+       put_lane (if narrow then esize else wide) k
+         (three_diff_elem u code esize a b (elem wide k d))
+End
+
+Definition pmull_bytes_def:
+  pmull_bytes 0 (n:word128) (m:word128) = (0w:word128) ∧
+  pmull_bytes (SUC k) n m =
+    pmull_bytes k n m ||
+    put_lane 16 k (w2w (clmul 8 (elem 8 k n) (elem 8 k m)))
+End
+
+Definition three_diff_value_def:
+  three_diff_value scalar q u (size:word2) (opc:word5)
+      (n:word128) (m:word128) (d:word128) =
+    let code = w2n opc; esize = 8 * 2 ** w2n size;
+        narrow = (code = 8 ∨ code = 12);
+        upper = (q ∧ ¬scalar ∧ ¬narrow);
+        a = if upper ∧ code ≠ 2 ∧ code ≠ 6 then n >>> 64 else n;
+        b = if upper then m >>> 64 else m
+    in if code = 28 then
+         if size = 3w then pmull_value q n m else pmull_bytes 8 a b
+       else
+         let r = three_diff_lanes (if scalar then 1 else 64 DIV esize) u code esize a b d
+         in if narrow ∧ q then (d && simd_lane_mask 64) || (r << 64) else r
+End
+
+Definition rdm_elem_def:
+  rdm_elem add esize (a:word64) (b:word64) (c:word64) =
+    let p = 2 * elem_int F esize a * elem_int F esize b;
+        z = elem_int F esize c * &(2 ** esize)
+    in saturate F esize (rshr T (if add then z + p else z - p) esize)
+End
+
+Definition by_element_lanes_def:
+  by_element_lanes 0 u (code:num) esize (index:num) n m d = (0w:word128) ∧
+  by_element_lanes (SUC k) u code esize index n m d =
+    let long = MEM code [2; 3; 6; 7; 10; 11];
+        width = if long then 2 * esize else esize;
+        a = elem esize k n; b = elem esize index m; c = elem width k d;
+        value = if code = 0 then c + a * b
+                else if code = 4 then c - a * b
+                else if code = 8 then a * b
+                else if long then
+                  three_diff_elem u
+                    (if code = 2 then 16 else if code = 3 then 18
+                     else if code = 6 then 20 else if code = 7 then 22
+                     else if code = 10 then 24 else 26) esize a b c
+                else if u then rdm_elem (code = 13) esize a b c
+                else three_same_elem (code = 13) 0w 22 esize a b c
+    in by_element_lanes k u code esize index n m d || put_lane width k value
+End
+
+(* Dot product uses four byte products per lane. Matrix multiply uses eight. *)
+Definition byte_products_def:
+  byte_products 0 un um (i:num) (j:num) (n:word128) (m:word128) = (0:int) ∧
+  byte_products (SUC k) un um i j n m =
+    byte_products k un um i j n m +
+    elem_int un 8 (elem 8 (i + k) n) * elem_int um 8 (elem 8 (j + k) m)
+End
+
+Definition dot_lanes_def:
+  dot_lanes 0 un um indexed (index:num) n m d = (0w:word128) ∧
+  dot_lanes (SUC k) un um indexed index n m d =
+    let j = if indexed then index else k;
+        sum = byte_products 4 un um (4 * k) (4 * j) n m
+    in dot_lanes k un um indexed index n m d ||
+       put_lane 32 k (elem 32 k d + i2w sum)
+End
+
+Definition by_element_value_def:
+  by_element_value scalar q u (size:word2) l mbit (opc:word4) h
+      (n:word128) (m:word128) (d:word128) =
+    let code = w2n opc; esize = 8 * 2 ** w2n size;
+        pair = (if h then 2 else 0) + (if l then 1 else 0);
+        index = if size = 1w then 2 * pair + (if mbit then 1 else 0) else pair;
+        long = MEM code [2; 3; 6; 7; 10; 11];
+        bits = if q ∧ ¬long then 128 else 64;
+        elements = if scalar then 1 else bits DIV esize;
+        source = if q ∧ long ∧ ¬scalar then n >>> 64 else n
+    in if code = 14 then dot_lanes (if q then 4 else 2) u u T index n m d
+       else if code = 15 ∧ ¬u then
+         dot_lanes (if q then 4 else 2) (size = 2w) (size = 0w) T index n m d
+       else by_element_lanes elements u code esize index source m d
+End
+
+Definition rdm_lanes_def:
+  rdm_lanes 0 add esize n m d = (0w:word128) ∧
+  rdm_lanes (SUC k) add esize n m d =
+    rdm_lanes k add esize n m d || put_lane esize k
+      (rdm_elem add esize (elem esize k n) (elem esize k m) (elem esize k d))
+End
+
+Definition matrix_lanes_def:
+  matrix_lanes 0 un um n m d = (0w:word128) ∧
+  matrix_lanes (SUC k) un um n m d =
+    let sum = byte_products 8 un um (8 * (k DIV 2)) (8 * (k MOD 2)) n m
+    in matrix_lanes k un um n m d || put_lane 32 k (elem 32 k d + i2w sum)
+End
+
+Definition extension_value_def:
+  extension_value scalar q u (size:word2) (opc:word5)
+      (n:word128) (m:word128) (d:word128) =
+    let esize = 8 * 2 ** w2n size;
+        bits = if q then 128 else 64
+    in if opc = 16w ∨ opc = 17w then
+         rdm_lanes (if scalar then 1 else bits DIV esize) (opc = 16w) esize n m d
+       else if opc = 18w then dot_lanes (bits DIV 32) u u F 0 n m d
+       else if opc = 19w then dot_lanes (bits DIV 32) T F F 0 n m d
+       else matrix_lanes 4 (u ∨ opc = 21w) u n m d
 End
