@@ -8,6 +8,11 @@ Definition simd_lane_mask_def:
   simd_lane_mask bits : word128 = (1w << bits) - 1w
 End
 
+Definition simd_ext_def:
+  simd_ext bytes (lo:word128) (hi:word128) =
+    (lo >>> (8 * bytes)) || (hi << (128 - 8 * bytes))
+End
+
 Definition leading_zeros_def:
   leading_zeros 0 (x:word64) = 0 ∧
   leading_zeros (SUC n) x = if word_bit n x then 0 else SUC (leading_zeros n x)

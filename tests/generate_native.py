@@ -585,6 +585,9 @@ def build_copy_probes() -> list[tuple[str, str, str, int, tuple[str, ...], int]]
         probes.append((f"umov_{dst[0]}_{element}",
                        f"SimdCopy F {flag(q)} F {imm5}w 7w 0w 29w",
                        f"umov {dst},v29.{element}[1]", -1, aliases, 28))
+    probes.append(("dup_elem_8b_upper",
+                   "SimdCopy F F F 31w 0w 28w 29w",
+                   "dup v28.8b,v29.b[15]", -1, (), 28))
     for size, element in enumerate(("b", "h", "s", "d")):
         imm5 = (1 << (size + 1)) | (1 << size)
         source = "w1" if size < 3 else "x1"
@@ -598,6 +601,10 @@ def build_copy_probes() -> list[tuple[str, str, str, int, tuple[str, ...], int]]
                        f"SimdCopy F T T {imm5}w {imm4}w 28w 29w",
                        f"ins v28.{element}[1],v29.{element}[{source_index}]",
                        -1, (f"mov v28.{element}[1],v29.{element}[{source_index}]",), 28))
+    probes.append(("ins_elem_h_ignored_imm4",
+                   "SimdCopy F T T 6w 3w 28w 29w",
+                   ".inst 0x6e061fbc", -1,
+                   ("mov v28.h[1],v29.h[1]",), 28))
     for size, element in enumerate(("b", "h", "s", "d")):
         imm5 = (1 << (size + 1)) | (1 << size)
         probes.append((f"dup_scalar_{element}",

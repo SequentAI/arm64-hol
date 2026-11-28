@@ -1254,11 +1254,6 @@ Definition bit_op_value_def:
   bit_op_value sf Rev32 x = reverse_groups 4 2 x
 End
 
-Definition simd_ext_def:
-  simd_ext bytes (lo:word128) (hi:word128) =
-    (lo >>> (8 * bytes)) || (hi << (128 - 8 * bytes))
-End
-
 Definition simd_extract_def:
   simd_extract FmovW (v:word128) = (w2w (w2w v : word32) : word64) ∧
   simd_extract FmovX v = w2w v ∧
