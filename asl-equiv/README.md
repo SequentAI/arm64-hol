@@ -3,8 +3,15 @@
 This optional package relates `arm64-hol` to Arm's own Armv9.4-A
 specification, exported to HOL4 from the Sail translation of Arm's ASL in
 [rems-project/sail-arm](https://github.com/rems-project/sail-arm)
-(`arm-v9.4-a`, revision `f7e11ae`). It is not built by default: name its
-theories to build them, e.g. `holbuild build armv9_p32Theory`.
+(`arm-v9.4-a`, revision `f7e11ae`). Neither the default build nor CI
+builds it: the model takes about 7 hours to build from scratch. Build and
+check it by naming its theories:
+
+```bash
+holbuild build aslSimTheory aslNonVacuityTheory aslDecodeNonVacuityTheory armv9_p32Theory
+holbuild check armv9_typesTheory armv9_p{1..32}Theory arm64AslTheory aslLemmasTheory \
+  aslSimTheory aslNonVacuityTheory aslDecodeNonVacuityTheory
+```
 
 - `model/` is the generated specification: the A64 instruction set without
   A32, SVE, SME or devices, with flat identity memory (no address
@@ -22,6 +29,15 @@ theories to build them, e.g. `holbuild build armv9_p32Theory`.
   NOP, ADD/SUB (immediate), FMOV (general to vector), and 64-bit LDR and
   STR (immediate, unsigned offset) at any address. `aslNonVacuity` and
   `aslDecodeNonVacuity` show that the hypotheses hold for some states.
+
+`lib/` is Lem's and Sail's HOL4 output as they ship it. Lem leaves 34 of
+its recursive functions without termination proofs, so their equations
+(`_def`) and induction theorems (`_ind`) carry the termination conditions
+as hypotheses, and `holbuild check` reports them. About 24 of them recurse
+on a list or a number (`foreachM`, `repeat`, …) and could be proved to
+terminate; the others are loops that need not terminate (`whileM`,
+`untilM`, …). No theorem in `model/` or `proofs/` depends on them; a proof
+that evaluates one discharges its conditions where it uses it.
 
 ## Licences
 
