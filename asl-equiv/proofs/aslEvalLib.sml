@@ -297,7 +297,8 @@ in
      conditions they state, evaluated as the specification's registers are;
      other assumptions as they are. *)
   val ok_facts =
-    facts_of [arm64AslTheory.arm64_asl_ok_def, aslLemmasTheory.asl_features_eq]
+    facts_of [arm64AslTheory.arm64_asl_ok_def, arm64AslTheory.arm64_asl_config_def,
+              aslLemmasTheory.asl_features_eq]
   (* Equations evaluated on each side, so that word equations stay
      equations. *)
   fun rel_facts th =

@@ -1,6 +1,6 @@
 (* The hypotheses of the simulation theorems can hold: every arm64-hol state
    has a related specification state in the configuration arm64_asl_ok
-   describes. *)
+   describes, and in the one arm64_asl_full describes. *)
 Theory aslNonVacuity
 Ancestors arm64Asl
 Libs wordsLib
@@ -37,13 +37,13 @@ End
 (* A specification state related to s; registers not named are
    unspecified. *)
 Definition asl_witness_def:
-  asl_witness (s:arm64_state) : regstate sequential_state =
+  asl_witness feats (s:arm64_state) : regstate sequential_state =
     <| regstate :=
          (ARB:regstate) with
            <| bitvector_64_reg := witness_x64 s;
-              bitvector_32_reg := K 0w;
+              bitvector_32_reg := (λr. if r = "_EDSCR" then 2w else 0w);
               bool_reg := K F;
-              vector_259_bool_reg := K asl_features;
+              vector_259_bool_reg := K feats;
               vector_32_bitvector_2048_reg := K (witness_z s);
               ProcState_reg := K (witness_pstate s) |>;
        memstate := asl_mem s.mem;
@@ -51,13 +51,14 @@ Definition asl_witness_def:
 End
 
 Theorem asl_witness_fields[local]:
-  (asl_witness s).memstate = asl_mem s.mem ∧
-  (asl_witness s).regstate.bitvector_64_reg = witness_x64 s ∧
-  (asl_witness s).regstate.bitvector_32_reg = K 0w ∧
-  (asl_witness s).regstate.bool_reg = K F ∧
-  (asl_witness s).regstate.vector_259_bool_reg = K asl_features ∧
-  (asl_witness s).regstate.vector_32_bitvector_2048_reg = K (witness_z s) ∧
-  (asl_witness s).regstate.ProcState_reg = K (witness_pstate s)
+  (asl_witness f s).memstate = asl_mem s.mem ∧
+  (asl_witness f s).regstate.bitvector_64_reg = witness_x64 s ∧
+  (asl_witness f s).regstate.bitvector_32_reg =
+    (λr. if r = "_EDSCR" then 2w else 0w) ∧
+  (asl_witness f s).regstate.bool_reg = K F ∧
+  (asl_witness f s).regstate.vector_259_bool_reg = K f ∧
+  (asl_witness f s).regstate.vector_32_bitvector_2048_reg = K (witness_z s) ∧
+  (asl_witness f s).regstate.ProcState_reg = K (witness_pstate s)
 Proof
   simp[asl_witness_def]
 QED
@@ -96,10 +97,11 @@ Proof
   strip_tac >> simp[access_list_dec_genlist, wordsTheory.w2w_w2w, wordsTheory.WORD_ALL_BITS]
 QED
 
-Theorem asl_witness_ok:
-  state_rel s (asl_witness s) ∧ arm64_asl_ok (asl_witness s)
+Theorem asl_witness_config:
+  state_rel s (asl_witness f s) ∧ arm64_asl_config (asl_witness f s) ∧
+  FeatureImpl_ref.read_from (asl_witness f s).regstate = f
 Proof
-  rewrite_tac[state_rel_def, arm64_asl_ok_def, gpr_rel_def, vreg_rel_def, flag_rel_def,
+  rewrite_tac[state_rel_def, arm64_asl_config_def, gpr_rel_def, vreg_rel_def, flag_rel_def,
        armv9_typesTheory.PC_ref_def, armv9_typesTheory.SP_EL0_ref_def,
        armv9_typesTheory.PSTATE_ref_def, armv9_typesTheory.Z_ref_def,
        armv9_typesTheory.FeatureImpl_ref_def, armv9_typesTheory.SCTLR_EL1_ref_def,
@@ -116,5 +118,13 @@ QED
 Theorem state_rel_exists:
   ∀s. ∃asl. state_rel s asl ∧ arm64_asl_ok asl
 Proof
-  metis_tac[asl_witness_ok]
+  gen_tac >> qexists_tac `asl_witness asl_features s` >>
+  simp[arm64_asl_ok_def, asl_witness_config]
+QED
+
+Theorem state_rel_exists_full:
+  ∀s. ∃asl. state_rel s asl ∧ arm64_asl_full asl
+Proof
+  gen_tac >> qexists_tac `asl_witness (features_of asl_profile_v94) s` >>
+  simp[arm64_asl_full_def, asl_witness_config]
 QED

@@ -37,7 +37,7 @@ QED
 (* After the evaluation of an instruction: the definitions relating the two
    states, and arm64-hol's for the instruction's effect. *)
 val rel_simps = [
-  state_rel_def, arm64_asl_ok_def, gpr_rel_def, vreg_rel_def, flag_rel_def,
+  state_rel_def, arm64_asl_ok_def, arm64_asl_config_def, gpr_rel_def, vreg_rel_def, flag_rel_def,
   armv9_typesTheory.PC_ref_def, armv9_typesTheory.SP_EL0_ref_def,
   armv9_typesTheory.PSTATE_ref_def, armv9_typesTheory.Z_ref_def,
   armv9_typesTheory.FeatureImpl_ref_def, armv9_typesTheory.SCTLR_EL1_ref_def,
