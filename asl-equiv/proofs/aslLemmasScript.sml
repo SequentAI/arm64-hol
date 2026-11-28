@@ -340,6 +340,35 @@ Proof
   blastLib.BBLAST_TAC
 QED
 
+(* A doubleword the specification loads from memory, as arm64-hol reads it. *)
+Theorem load_bits:
+    v2w [s.mem (a + 7w) ' 7; s.mem (a + 7w) ' 6; s.mem (a + 7w) ' 5;
+         s.mem (a + 7w) ' 4; s.mem (a + 7w) ' 3; s.mem (a + 7w) ' 2;
+         s.mem (a + 7w) ' 1; s.mem (a + 7w) ' 0; s.mem (a + 6w) ' 7;
+         s.mem (a + 6w) ' 6; s.mem (a + 6w) ' 5; s.mem (a + 6w) ' 4;
+         s.mem (a + 6w) ' 3; s.mem (a + 6w) ' 2; s.mem (a + 6w) ' 1;
+         s.mem (a + 6w) ' 0; s.mem (a + 5w) ' 7; s.mem (a + 5w) ' 6;
+         s.mem (a + 5w) ' 5; s.mem (a + 5w) ' 4; s.mem (a + 5w) ' 3;
+         s.mem (a + 5w) ' 2; s.mem (a + 5w) ' 1; s.mem (a + 5w) ' 0;
+         s.mem (a + 4w) ' 7; s.mem (a + 4w) ' 6; s.mem (a + 4w) ' 5;
+         s.mem (a + 4w) ' 4; s.mem (a + 4w) ' 3; s.mem (a + 4w) ' 2;
+         s.mem (a + 4w) ' 1; s.mem (a + 4w) ' 0; s.mem (a + 3w) ' 7;
+         s.mem (a + 3w) ' 6; s.mem (a + 3w) ' 5; s.mem (a + 3w) ' 4;
+         s.mem (a + 3w) ' 3; s.mem (a + 3w) ' 2; s.mem (a + 3w) ' 1;
+         s.mem (a + 3w) ' 0; s.mem (a + 2w) ' 7; s.mem (a + 2w) ' 6;
+         s.mem (a + 2w) ' 5; s.mem (a + 2w) ' 4; s.mem (a + 2w) ' 3;
+         s.mem (a + 2w) ' 2; s.mem (a + 2w) ' 1; s.mem (a + 2w) ' 0;
+         s.mem (a + 1w) ' 7; s.mem (a + 1w) ' 6; s.mem (a + 1w) ' 5;
+         s.mem (a + 1w) ' 4; s.mem (a + 1w) ' 3; s.mem (a + 1w) ' 2;
+         s.mem (a + 1w) ' 1; s.mem (a + 1w) ' 0; s.mem a ' 7; s.mem a ' 6; s.mem a ' 5;
+         s.mem a ' 4; s.mem a ' 3; s.mem a ' 2; s.mem a ' 1; s.mem a ' 0] : word64 =
+    w2w (read_bytes functional_storage 8 s a)
+Proof
+  simp[numLib.SUC_RULE arm64IsaTheory.read_bytes_def,
+       arm64IsaTheory.functional_storage_def] >>
+  blastLib.BBLAST_TAC
+QED
+
 (* The specification's register named for a general-purpose register
    number, as arm64-hol's register. *)
 Theorem state_rel_gpr:

@@ -99,6 +99,58 @@ Proof
    gvs (arm64IsaTheory.simd_extract_def :: rel_simps))
 QED
 
+(* A 16-byte-aligned SP plus a scaled doubleword offset is 8-byte aligned. *)
+Theorem sp_offset_aligned[local]:
+  15w && (sp:word64) = 0w ⇒ (2 >< 0) (sp + w2w (imm:word12) ≪ 3) ≠ 0w:word3 ⇒ F
+Proof
+  blastLib.BBLAST_TAC
+QED
+
+(* LDR (immediate, unsigned offset), 64-bit, at any address: the
+   specification reads an unaligned doubleword byte by byte. *)
+Theorem asl_sim_ldr_x:
+  asl_sim (MemImm F 1w 3w t n (Scaled imm))
+Proof
+  rewrite_tac[asl_sim_def] >> rpt strip_tac >>
+  drule_all asl_next_fetch >> disch_then SUBST1_TAC >>
+  imp_res_tac state_rel_gpr >>
+  Cases_on `t = 31w` >> Cases_on `n = 31w` >>
+  Cases_on `(2 >< 0) (base_reg functional_storage s n + w2w imm ≪ 3) = (0w:word3)` >>~-
+  ([`ExecuteA64 _`],
+   gvs[arm64IsaTheory.encode_def, arm64IsaTheory.mem_opc_ok_def,
+       arm64IsaTheory.single_encoding_def, arm64IsaTheory.mem_base_def,
+       arm64IsaTheory.flag_field_def, arm64IsaTheory.reg_fields_def,
+       arm64IsaTheory.insert_field_def, arm64IsaTheory.execute_with_def,
+       arm64IsaTheory.execute_mem_def, arm64IsaTheory.base_reg_def,
+       arm64IsaTheory.functional_storage_def, arm64IsaTheory.transfer_scale_def,
+       arm64IsaTheory.is_prefetch_def, arm64IsaTheory.mem_load_def,
+       arm64IsaTheory.check_sp_def, arm64IsaTheory.indexed_addr_def] >>
+   qpat_x_assum `_ = fetch _ _` (assume_tac o SYM) >>
+   qpat_x_assum `_ = Next _` (strip_assume_tac o SIMP_RULE (srw_ss()) [AllCaseEqs()]) >>
+   res_tac >> imp_res_tac sp_offset_aligned >>
+   aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >>
+   aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >>
+   aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >>
+   aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >>
+   aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >>
+   aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >>
+   CONV_TAC aslEvalLib.FIELDS_CONV >>
+   irule_at (Pos hd) EQ_REFL >>
+   gvs[load_bits, wordsTheory.w2w_w2w, wordsTheory.WORD_ALL_BITS,
+       wordsTheory.EXTRACT_ALL_BITS, arm64IsaTheory.load_extend_def,
+       arm64IsaTheory.put_loaded_def, arm64IsaTheory.finish_mem_def,
+       arm64IsaTheory.writes_back_def] >>
+   gvs rel_simps >>
+   (* The unaligned read assembles the doubleword byte by byte. *)
+   rw[] >>
+   rewrite_tac[GSYM wordsTheory.WORD_ADD_ASSOC] >>
+   qspec_tac (`s.regs n + w2w imm ≪ 3`, `a`) >>
+   simp[numLib.SUC_RULE arm64IsaTheory.read_bytes_def,
+        arm64IsaTheory.functional_storage_def, integer_wordTheory.i2w_pos,
+        wordsTheory.WORD_ADD_COMM] >>
+   blastLib.BBLAST_TAC)
+QED
+
 (* An arm64-hol step of an instruction the specification simulates is
    simulated by the specification's step. *)
 Theorem asl_step_sim:
