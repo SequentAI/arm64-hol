@@ -99,6 +99,12 @@ Proof
    gvs (arm64IsaTheory.simd_extract_def :: rel_simps))
 QED
 
+Theorem update_cong[local]:
+  a = a' ∧ b = b' ∧ m = m' ⇒ (a =+ b) m = (a' =+ b') m'
+Proof
+  simp[]
+QED
+
 (* A 16-byte-aligned SP plus a scaled doubleword offset is 8-byte aligned. *)
 Theorem sp_offset_aligned[local]:
   15w && (sp:word64) = 0w ⇒ (2 >< 0) (sp + w2w (imm:word12) ≪ 3) ≠ 0w:word3 ⇒ F
@@ -151,6 +157,51 @@ Proof
    blastLib.BBLAST_TAC)
 QED
 
+(* STR (immediate, unsigned offset), 64-bit, at any address. *)
+Theorem asl_sim_str_x:
+  asl_sim (MemImm F 0w 3w t n (Scaled imm))
+Proof
+  rewrite_tac[asl_sim_def] >> rpt strip_tac >>
+  drule_all asl_next_fetch >> disch_then SUBST1_TAC >>
+  imp_res_tac state_rel_gpr >>
+  Cases_on `t = 31w` >> Cases_on `n = 31w` >>
+  Cases_on `(2 >< 0) (base_reg functional_storage s n + w2w imm ≪ 3) = (0w:word3)` >>~-
+  ([`ExecuteA64 _`],
+   gvs[arm64IsaTheory.encode_def, arm64IsaTheory.mem_opc_ok_def,
+       arm64IsaTheory.single_encoding_def, arm64IsaTheory.mem_base_def,
+       arm64IsaTheory.flag_field_def, arm64IsaTheory.reg_fields_def,
+       arm64IsaTheory.insert_field_def, arm64IsaTheory.execute_with_def,
+       arm64IsaTheory.execute_mem_def, arm64IsaTheory.base_reg_def,
+       arm64IsaTheory.functional_storage_def, arm64IsaTheory.transfer_scale_def,
+       arm64IsaTheory.is_prefetch_def, arm64IsaTheory.mem_load_def,
+       arm64IsaTheory.check_sp_def, arm64IsaTheory.indexed_addr_def,
+       arm64IsaTheory.stored_value_def, arm64IsaTheory.gpr_def] >>
+   qpat_x_assum `_ = fetch _ _` (assume_tac o SYM) >>
+   qpat_x_assum `_ = Next _` (strip_assume_tac o SIMP_RULE (srw_ss()) [AllCaseEqs()]) >>
+   res_tac >> imp_res_tac sp_offset_aligned >>
+   aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >>
+   aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >>
+   aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >>
+   aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >>
+   aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >>
+   aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >> aslEvalLib.EXEC_STEP_TAC >>
+   CONV_TAC aslEvalLib.FIELDS_CONV >>
+   irule_at (Pos hd) EQ_REFL >>
+   gvs[arm64IsaTheory.finish_mem_def, arm64IsaTheory.writes_back_def,
+       write_bytes_fields] >>
+   gvs rel_simps >>
+   simp[listTheory.FOLDL, lem_listTheory.list_combine_def, aligned8_w2n,
+        integer_wordTheory.i2w_pos, asl_mem_update, bitU_cond_eq,
+        write_bytes_fields] >>
+   (* The bytes the specification stores, as arm64-hol writes them. *)
+   AP_TERM_TAC >>
+   simp[numLib.SUC_RULE arm64IsaTheory.write_bytes_def,
+        arm64IsaTheory.functional_storage_def] >>
+   rpt (irule update_cong >> rpt conj_tac) >>
+   blastLib.BBLAST_TAC)
+QED
+
+
 (* An arm64-hol step of an instruction the specification simulates is
    simulated by the specification's step. *)
 Theorem asl_step_sim:
@@ -168,13 +219,16 @@ QED
 Definition asl_pilot_def:
   asl_pilot i ⇔
     i = Nop ∨ (∃sf sub flags shift d n imm. i = AddImm sf sub flags shift d n imm) ∨
-    (∃d n. i = SimdTransfer FmovX d n)
+    (∃d n. i = SimdTransfer FmovX d n) ∨
+    (∃t n imm. i = MemImm F 1w 3w t n (Scaled imm)) ∨
+    (∃t n imm. i = MemImm F 0w 3w t n (Scaled imm))
 End
 
 Theorem asl_pilot_sim:
   asl_pilot i ⇒ asl_sim i
 Proof
-  rw[asl_pilot_def] >> simp[asl_sim_nop, asl_sim_add_imm, asl_sim_fmov_x]
+  rw[asl_pilot_def] >>
+  simp[asl_sim_nop, asl_sim_add_imm, asl_sim_fmov_x, asl_sim_ldr_x, asl_sim_str_x]
 QED
 
 Theorem asl_step_pilot:

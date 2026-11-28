@@ -27,9 +27,10 @@ fun memo_eq_conv t =
                       fun decision th =
                         let val r = rhs (concl th)
                         in if aconv r T orelse aconv r F then SOME th else NONE end
+                      val t0 = Time.now ()
                       val r = decision (blastLib.BBLAST_CONV t)
                               handle UNCHANGED => NONE | HOL_ERR _ => NONE
-                      val () = if !eq_trace then print ("BLAST done " ^ (if isSome r then "rewrote" else "no") ^ "\n") else ()
+                      val () = if !eq_trace then print ("BLAST done " ^ (if isSome r then "rewrote" else "no") ^ " " ^ Time.toString (Time.- (Time.now (), t0)) ^ "\n") else ()
                   in eq_memo := Redblackmap.insert (!eq_memo, t, r); r end
   in case r of SOME th => th | NONE => raise UNCHANGED end
 local
@@ -193,9 +194,18 @@ in
       val hyp = list_mk_conj (map concl word_facts)
       val facts_th = LIST_CONJ word_facts
       fun is_bool_lit t = aconv t T orelse aconv t F
+      (* A bit of a word no fact mentions (of a stored register, say)
+         cannot be decided; bit-blasting would only search. *)
+      fun free_bit t =
+        fcpSyntax.is_fcp_index t andalso
+        let val w = fst (fcpSyntax.dest_fcp_index t)
+        in not (wordsSyntax.is_word_literal w) andalso
+           not (List.exists (fn th => can (find_term (aconv w)) (concl th)) facts)
+        end
       (* Fields of the encoding first, so that a guard on one (Rn = 31, say)
          is the fact about it (n ≠ 31w) that rewriting settles. *)
       val pre =
+        if free_bit g then raise mk_HOL_ERR "aslEvalLib" "decide" "free bit" else
         QCONV (FIELDS_CONV THENC PURE_REWRITE_CONV eqs THENC EXEC THENC
                (fn t => if is_bool_lit t then raise UNCHANGED
                         else (guard_conv THENC REWRITE_CONV eqs) t)) g
@@ -212,6 +222,7 @@ in
         | first (f :: fs) = case f () of NONE => first fs | r => r
     in
       if aconv g' T orelse aconv g' F then SOME pre
+      else if free_bit g' then NONE
       else
         first [
           fn () => Option.map (fn th => TRANS pre (EQT_INTRO th)) (prove_alone g'),

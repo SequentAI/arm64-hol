@@ -369,6 +369,56 @@ Proof
   blastLib.BBLAST_TAC
 QED
 
+(* A store changes only memory. *)
+Theorem write_bytes_fields:
+  ∀n a v s.
+    (write_bytes ops n a v s).regs = s.regs ∧ (write_bytes ops n a v s).sp = s.sp ∧
+    (write_bytes ops n a v s).pc = s.pc ∧ (write_bytes ops n a v s).nzcv = s.nzcv ∧
+    (write_bytes ops n a v s).vregs = s.vregs ∧
+    (write_bytes ops n a v s).perms = s.perms
+Proof
+  Induct >> simp[arm64IsaTheory.write_bytes_def]
+QED
+
+(* The bytes of an aligned doubleword do not wrap around the address space. *)
+Theorem aligned8_w2n:
+  (2 >< 0) (a:word64) = (0w:word3) ⇒
+  w2n a + 1 = w2n (a + 1w) ∧ w2n a + 2 = w2n (a + 2w) ∧
+  w2n a + 3 = w2n (a + 3w) ∧ w2n a + 4 = w2n (a + 4w) ∧
+  w2n a + 5 = w2n (a + 5w) ∧ w2n a + 6 = w2n (a + 6w) ∧
+  w2n a + 7 = w2n (a + 7w)
+Proof
+  strip_tac >>
+  `a <=+ 0xFFFFFFFFFFFFFFF8w` by (pop_assum mp_tac >> blastLib.BBLAST_TAC) >>
+  fs[wordsTheory.WORD_LS, wordsTheory.word_add_def]
+QED
+
+Theorem bits_round[local]:
+  EVERY (λb. b = B0 ∨ b = B1) l ⇒ MAP bitU_of_bool (MAP (λb. b = B1) l) = l
+Proof
+  Induct_on `l` >> rw[sail2_valuesTheory.bitU_of_bool_def] >> rw[]
+QED
+
+(* A stored bit, as the specification lists it. *)
+Theorem bitU_cond_eq:
+  ((if c then B1 else B0) = B1 ⇔ c) ∧ ((if c then B1 else B0) = B0 ⇔ ¬c)
+Proof
+  rw[]
+QED
+
+(* A byte the specification stores, as arm64-hol stores it. *)
+Theorem asl_mem_update:
+  LENGTH l = 8 ∧ EVERY (λb. b = B0 ∨ b = B1) l ⇒
+  asl_mem m |+ (w2n a, l) = asl_mem ((a =+ v2w (MAP (λb. b = B1) l)) m)
+Proof
+  rw[finite_mapTheory.fmap_eq_flookup, finite_mapTheory.FLOOKUP_UPDATE,
+     FLOOKUP_asl_mem, combinTheory.APPLY_UPDATE_THM] >>
+  `w2n a < 18446744073709551616` by simp[wordsTheory.w2n_lt |> INST_TYPE [alpha |-> ``:64``] |> SIMP_RULE (srw_ss()) []] >>
+  Cases_on `x < 18446744073709551616` >> simp[] >>
+  Cases_on `a = n2w x` >>
+  gvs[bitstringTheory.w2v_v2w, bitstringTheory.fixwidth_id_imp, bits_round, w2n_eq_n2w]
+QED
+
 (* The specification's register named for a general-purpose register
    number, as arm64-hol's register. *)
 Theorem state_rel_gpr:

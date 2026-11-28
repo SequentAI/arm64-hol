@@ -15,6 +15,13 @@ theories to build them, e.g. `holbuild build armv9_p32Theory`.
   parts build in parallel.
 - `lib/` holds the Lem and Sail support libraries the model needs.
 - `gen/generate.sh` regenerates `model/`; its header says how.
+- `proofs/` relates the two. `arm64Asl` defines the state relation, the
+  system configuration `arm64-hol` assumes, the specification's step, and
+  `asl_complete`, the statement that the specification simulates every
+  instruction `arm64-hol` decodes. `aslSim` proves the simulation so far:
+  NOP, ADD/SUB (immediate), FMOV (general to vector), and 64-bit LDR and
+  STR (immediate, unsigned offset) at any address. `aslNonVacuity` and
+  `aslDecodeNonVacuity` show that the hypotheses hold for some states.
 
 ## Licences
 
