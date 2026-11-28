@@ -76,7 +76,7 @@ Datatype:
 End
 
 Datatype:
-  simd_transfer = FmovW | FmovX | UmovB0 | UmovD1 | Dup2D | FmovToD
+  simd_transfer = FmovW | FmovX | FmovToD
 End
 
 Datatype:
@@ -120,6 +120,8 @@ Datatype:
   | SimdThreeSame bool bool bool word2 word5 word5 word5 word5
   | SimdTwoMisc bool bool bool word2 word5 word5 word5
   | SimdAcross bool bool bool word2 word5 word5 word5
+  | SimdCopy bool bool bool word5 word4 word5 word5
+  | SimdPermute bool word2 word3 word5 word5 word5
   | Crc32 bool word2 word5 word5 word5
   | Pmull bool word5 word5 word5
   | Aes aes_op word5 word5
@@ -130,8 +132,8 @@ Datatype:
   | CryptoThree bool word2 word5 word5 word5
   | Xar word5 word5 word5 word6
   | CryptoTwo word2 word5 word5
-  | SimdTable bool word5 word5 word5
-  | SimdExtract word5 word5 word5 word4
+  | SimdTable bool bool word2 word5 word5 word5
+  | SimdExtract bool word5 word5 word5 word4
   | SimdShift simd_shift word5 word5 word7
   | SimdTransfer simd_transfer word5 word5
   | Nop
@@ -350,12 +352,44 @@ Definition across_ok_def:
     else (MEM (w2n opc) [3; 10; 26] ∨ (opc = 27w ∧ ¬u)) ∧ size ≠ 3w ∧ ¬(size = 2w ∧ ¬q)
 End
 
+Definition simd_copy_ok_def:
+  simd_copy_ok scalar q op (imm5:word5) (imm4:word4) ⇔
+    let sz = w2n (simd_copy_size imm5) in
+      (word_bit 0 imm5 ∨ word_bit 1 imm5 ∨ word_bit 2 imm5 ∨ word_bit 3 imm5) ∧
+      if scalar then q ∧ ¬op ∧ imm4 = 0w ∧ sz < 4
+      else if op then
+        q ∧ sz < 4 ∧
+        (sz = 0 ∨ (sz = 1 ∧ ¬word_bit 0 imm4) ∨
+         (sz = 2 ∧ ¬word_bit 0 imm4 ∧ ¬word_bit 1 imm4) ∨
+         (sz = 3 ∧ ¬word_bit 0 imm4 ∧ ¬word_bit 1 imm4 ∧ ¬word_bit 2 imm4))
+      else if imm4 = 0w then sz < 3 ∨ q
+      else if imm4 = 1w then sz < 3 ∨ q
+      else if imm4 = 3w then q ∧ sz < 4
+      else if imm4 = 5w then
+        (sz < 2 ∨ q) ∧ sz < 3
+      else if imm4 = 7w then
+        (if q then sz = 3 else sz < 3)
+      else F
+End
+
+Definition simd_permute_ok_def:
+  simd_permute_ok q (sz:word2) (opcode:word3) ⇔
+    (opcode = 1w ∨ opcode = 2w ∨ opcode = 3w ∨
+     opcode = 5w ∨ opcode = 6w ∨ opcode = 7w) ∧
+    ¬(sz = 3w ∧ ¬q)
+End
+
+Definition simd_table_ok_def:
+  simd_table_ok (len:word2) ⇔ w2n len < 4
+End
+
+Definition simd_extract_ok_def:
+  simd_extract_ok q (imm4:word4) ⇔ q ∨ w2n imm4 < 8
+End
+
 Definition simd_transfer_base_def:
   simd_transfer_base FmovW = 0x1e260000w ∧
   simd_transfer_base FmovX = 0x9e660000w ∧
-  simd_transfer_base UmovB0 = 0x0e013c00w ∧
-  simd_transfer_base UmovD1 = 0x4e183c00w ∧
-  simd_transfer_base Dup2D = 0x4e080c00w ∧
   simd_transfer_base FmovToD = 0x9e670000w
 End
 
@@ -422,10 +456,16 @@ Definition classify_simd_def:
       else if w && 0xfffff000w = 0xcec08000w ∧
               (if word_bit 10 w then feat.sm4 else feat.sha512) then
         SOME (CryptoTwo (w2w (w >>> 10)) d n)
-      else if binary = 0x4e000000w then SOME (SimdTable F d n m)
-      else if binary = 0x4e001000w then SOME (SimdTable T d n m)
-      else if w && 0xffe08400w = 0x6e000000w then
-        SOME (SimdExtract d n m (w2w (w >>> 11)))
+      else if w && 0x0f000400w = 0x0e000400w then
+        SOME (SimdCopy (word_bit 28 w) (word_bit 30 w) (word_bit 29 w)
+                (w2w (w >>> 16)) (w2w (w >>> 11)) d n)
+      else if w && 0x2f208c00w = 0x0e000800w then
+        SOME (SimdPermute (word_bit 30 w) (w2w (w >>> 22))
+                (w2w (w >>> 12)) d n m)
+      else if w && 0x2fe08c00w = 0x0e000000w then
+        SOME (SimdTable (word_bit 30 w) (word_bit 12 w) (w2w (w >>> 13)) d n m)
+      else if w && 0x2fe08400w = 0x2e000000w then
+        SOME (SimdExtract (word_bit 30 w) d n m (w2w (w >>> 11)))
       else if shift = simd_shift_base Shl ∧ simd_shift_imm_ok imm then
         SOME (SimdShift Shl d n imm)
       else if shift = simd_shift_base Ushr ∧ simd_shift_imm_ok imm then
@@ -434,9 +474,6 @@ Definition classify_simd_def:
         SOME (SimdShift Sri d n imm)
       else if unary = simd_transfer_base FmovW then SOME (SimdTransfer FmovW d n)
       else if unary = simd_transfer_base FmovX then SOME (SimdTransfer FmovX d n)
-      else if unary = simd_transfer_base UmovB0 then SOME (SimdTransfer UmovB0 d n)
-      else if unary = simd_transfer_base UmovD1 then SOME (SimdTransfer UmovD1 d n)
-      else if unary = simd_transfer_base Dup2D then SOME (SimdTransfer Dup2D d n)
       else if unary = simd_transfer_base FmovToD then SOME (SimdTransfer FmovToD d n)
       else NONE
 End
@@ -582,6 +619,16 @@ Definition encode_def:
        SOME (0x0e300800w || flag_field scalar 28 || flag_field q 30 || flag_field u 29 ||
              insert_field 22 size || insert_field 12 opc || reg_fields d n 0w)
      else NONE) ∧
+  encode (SimdCopy scalar q op imm5 imm4 d n) =
+    (if simd_copy_ok scalar q op imm5 imm4 then
+       SOME (0x0e000400w || flag_field scalar 28 || flag_field q 30 || flag_field op 29 ||
+             insert_field 16 imm5 || insert_field 11 imm4 || reg_fields d n 0w)
+     else NONE) ∧
+  encode (SimdPermute q size opc d n m) =
+    (if simd_permute_ok q size opc then
+       SOME (0x0e000800w || flag_field q 30 || insert_field 22 size ||
+             insert_field 12 opc || reg_fields d n m)
+     else NONE) ∧
   encode (Crc32 castagnoli size d n m) =
     SOME (0x1ac04000w || flag_field (size = 3w) 31 || flag_field castagnoli 12 ||
           insert_field 10 size || reg_fields d n m) ∧
@@ -610,10 +657,16 @@ Definition encode_def:
   encode (CryptoTwo opc d n) =
     (if w2n opc < 2 then SOME (0xcec08000w || insert_field 10 opc || reg_fields d n 0w)
      else NONE) ∧
-  encode (SimdTable extend d n m) =
-    SOME (0x4e000000w || flag_field extend 12 || reg_fields d n m) ∧
-  encode (SimdExtract d n m imm) =
-    SOME (0x6e000000w || reg_fields d n m || insert_field 11 imm) ∧
+  encode (SimdTable q op len d n m) =
+    (if simd_table_ok len then
+       SOME (0x0e000000w || flag_field q 30 || flag_field op 12 ||
+             insert_field 13 len || reg_fields d n m)
+     else NONE) ∧
+  encode (SimdExtract q d n m imm) =
+    (if simd_extract_ok q imm then
+       SOME (0x2e000000w || flag_field q 30 || reg_fields d n m ||
+             insert_field 11 imm)
+     else NONE) ∧
   encode (SimdShift op d n imm) =
     (if simd_shift_imm_ok imm then
        SOME (simd_shift_base op || reg_fields d n 0w || insert_field 16 imm)
@@ -1177,9 +1230,6 @@ End
 Definition simd_extract_def:
   simd_extract FmovW (v:word128) = (w2w (w2w v : word32) : word64) ∧
   simd_extract FmovX v = w2w v ∧
-  simd_extract UmovB0 v = w2w (w2w v : word8) ∧
-  simd_extract UmovD1 v = w2w (v >>> 64) ∧
-  simd_extract Dup2D v = 0w ∧
   simd_extract FmovToD v = 0w
 End
 
@@ -1307,6 +1357,38 @@ Definition execute_with_def:
   execute_with ops (SimdAcross scalar q u size opc d n) s =
     Next (advance (s with vregs := ops.put_vec d
       (across_value q u size opc (ops.get_vec s.vregs n)) s.vregs)) ∧
+  execute_with ops (SimdCopy scalar q op imm5 imm4 d n) s =
+    (let sz = w2n (simd_copy_size imm5);
+         esize = 8 * 2 ** sz;
+         vector = ops.get_vec s.vregs n;
+         lane = elem esize (simd_copy_index imm5 sz) vector;
+         source = elem esize (simd_copy_source_index imm4 sz) vector;
+         elements = (if q then 128 else 64) DIV esize
+     in if scalar then
+          Next (advance (s with vregs := ops.put_vec d
+            (simd_copy_replicate esize 1 lane) s.vregs))
+        else if op then
+          Next (advance (s with vregs := ops.put_vec d
+            (simd_copy_insert esize imm5 source (ops.get_vec s.vregs d)) s.vregs))
+        else if imm4 = 0w then
+          Next (advance (s with vregs := ops.put_vec d
+            (simd_copy_replicate esize elements lane) s.vregs))
+        else if imm4 = 1w then
+          Next (advance (s with vregs := ops.put_vec d
+            (simd_copy_replicate esize elements (gpr ops s n)) s.vregs))
+        else if imm4 = 3w then
+          Next (advance (s with vregs := ops.put_vec d
+            (simd_copy_insert esize imm5 (gpr ops s n) (ops.get_vec s.vregs d)) s.vregs))
+        else if imm4 = 5w then
+          Next (advance (set_gpr ops d
+            (simd_copy_gpr q T esize lane) s))
+        else
+          Next (advance (set_gpr ops d
+            (simd_copy_gpr q F esize lane) s))) ∧
+  execute_with ops (SimdPermute q size opc d n m) s =
+    Next (advance (s with vregs := ops.put_vec d
+      (simd_permute_value q size opc (ops.get_vec s.vregs n)
+        (ops.get_vec s.vregs m)) s.vregs)) ∧
   execute_with ops (Crc32 castagnoli size d n m) s =
     Next (advance (set_gpr ops d
       (w2w (crc32_value castagnoli size (w2w (gpr ops s n)) (gpr ops s m))) s)) ∧
@@ -1337,21 +1419,21 @@ Definition execute_with_def:
   execute_with ops (CryptoTwo opc d n) s =
     Next (advance (s with vregs := ops.put_vec d
       (crypto_two_value opc (ops.get_vec s.vregs d) (ops.get_vec s.vregs n)) s.vregs)) ∧
-  execute_with ops (SimdTable extend d n m) s =
+  execute_with ops (SimdTable q op len d n m) s =
     Next (advance (s with vregs := ops.put_vec d
-      (simd_table 16 (ops.get_vec s.vregs n) (ops.get_vec s.vregs m)
-        (if extend then ops.get_vec s.vregs d else 0w)) s.vregs)) ∧
-  execute_with ops (SimdExtract d n m imm) s =
+      (simd_table_value q (¬op) len (ops.get_vec s.vregs n)
+        (ops.get_vec s.vregs (n + 1w)) (ops.get_vec s.vregs (n + 2w))
+        (ops.get_vec s.vregs (n + 3w)) (ops.get_vec s.vregs m)
+        (ops.get_vec s.vregs d)) s.vregs)) ∧
+  execute_with ops (SimdExtract q d n m imm) s =
     Next (advance (s with vregs := ops.put_vec d
-      (simd_ext (w2n imm) (ops.get_vec s.vregs n) (ops.get_vec s.vregs m)) s.vregs)) ∧
+      (simd_extract_value q imm (ops.get_vec s.vregs n)
+        (ops.get_vec s.vregs m)) s.vregs)) ∧
   execute_with ops (SimdShift op d n imm) s =
     Next (advance (s with vregs := ops.put_vec d
       (simd_shift_value op imm (ops.get_vec s.vregs n) (ops.get_vec s.vregs d)) s.vregs)) ∧
   execute_with ops (SimdTransfer op d n) s =
-    (if op = Dup2D then
-       let x : word128 = w2w (gpr ops s n) in
-       Next (advance (s with vregs := ops.put_vec d (x || (x << 64)) s.vregs))
-     else if op = FmovToD then
+    (if op = FmovToD then
        Next (advance (s with vregs := ops.put_vec d (w2w (gpr ops s n)) s.vregs))
      else Next (advance (set_gpr ops d (simd_extract op (ops.get_vec s.vregs n)) s))) ∧
   execute_with ops Nop s = Next (advance s)
