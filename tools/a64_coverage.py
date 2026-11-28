@@ -1071,6 +1071,12 @@ def main() -> None:
         raise SystemExit(f"Expected Sail to decode {cas_word:08x} as valid CAS, got {status}")
     probes = add_probes(clauses, by_group, interp)
     witnesses = [(cas_word, cas_clause)] + [case for cases in probes.values() for case in cases]
+    umov_clause = next(clause for clause in clauses if clause.mnemonic == "umov_advsimd")
+    umov_word = 0x0E013FE2
+    status, owner = sail_decode(umov_word, clauses, by_group, interp)
+    if status != "valid" or owner is not umov_clause:
+        raise SystemExit(f"Expected Sail to decode {umov_word:08x} as UMOV, got {status}")
+    witnesses.append((umov_word, umov_clause))
     sampled_words = {word for word, *_ in rows}
     for word, owner in witnesses:
         if word not in sampled_words:

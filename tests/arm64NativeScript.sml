@@ -213,10 +213,14 @@ val () = check_fault "read_only_page_denies_fetch" enabled
   ``^read_only_page with pc := 4096w`` ``Fetch``;
 val () = check_fault "cnt_rejects_reserved_size" enabled
   ``test_state 0x0e605800w ^initial`` ``Unsupported``;
-val () = check_fault "tbl_multi_register_is_unsupported" enabled
-  ``test_state 0x4e012000w ^initial`` ``Unsupported``;
-val () = check_fault "ext_64bit_arrangement_is_unsupported" enabled
-  ``test_state 0x2e010000w ^initial`` ``Unsupported``;
+val () = check_fault "tbl_reserved_op2_is_unsupported" enabled
+  ``test_state 0x4e412000w ^initial`` ``Unsupported``;
+val () = check_fault "ext_q0_reserved_imm_is_unsupported" enabled
+  ``test_state 0x2e014000w ^initial`` ``Unsupported``;
+val () = check_fault "simd_copy_rejects_zero_imm5" enabled
+  ``test_state 0x0e0007bcw ^initial`` ``Unsupported``;
+val () = check_fault "simd_permute_rejects_q0_64bit" enabled
+  ``test_state 0x0ede1bbcw ^initial`` ``Unsupported``;
 val () = check_fault "rev32_rejects_reserved_size" enabled
   ``test_state 0x6ea00800w ^initial`` ``Unsupported``;
 val q_store = ``test_state 0x3d800020w ^initial``;

@@ -8,6 +8,11 @@ Definition simd_lane_mask_def:
   simd_lane_mask bits : word128 = (1w << bits) - 1w
 End
 
+Definition simd_ext_def:
+  simd_ext bytes (lo:word128) (hi:word128) =
+    (lo >>> (8 * bytes)) || (hi << (128 - 8 * bytes))
+End
+
 Definition leading_zeros_def:
   leading_zeros 0 (x:word64) = 0 ∧
   leading_zeros (SUC n) x = if word_bit n x then 0 else SUC (leading_zeros n x)
@@ -30,9 +35,110 @@ Definition put_lane_def:
   put_lane esize i (v:word64) : word128 = (w2w v && simd_lane_mask esize) << (esize * i)
 End
 
+Definition simd_copy_size_def:
+  simd_copy_size (imm5:word5) : word2 =
+    if word_bit 0 imm5 then 0w else if word_bit 1 imm5 then 1w
+    else if word_bit 2 imm5 then 2w else 3w
+End
+
+Definition simd_copy_index_def:
+  simd_copy_index (imm5:word5) sz = w2n (imm5 >>> (sz + 1))
+End
+
+Definition simd_copy_source_index_def:
+  simd_copy_source_index (imm4:word4) sz = w2n (imm4 >>> sz)
+End
+
+Definition simd_copy_replicate_def:
+  simd_copy_replicate esize 0 (x:word64) = (0w:word128) ∧
+  simd_copy_replicate esize (SUC k) x =
+    simd_copy_replicate esize k x || put_lane esize k x
+End
+
+Definition simd_copy_insert_def:
+  simd_copy_insert esize (imm5:word5) x old =
+    old && ¬(simd_lane_mask esize << (esize * simd_copy_index imm5
+      (w2n (simd_copy_size imm5)))) ||
+    put_lane esize (simd_copy_index imm5 (w2n (simd_copy_size imm5))) x
+End
+
+Definition simd_pair_elem_def:
+  simd_pair_elem esize elements j (n:word128) (m:word128) =
+    if j < elements then elem esize j n else elem esize (j - elements) m
+End
+
+Definition simd_permute_elem_def:
+  simd_permute_elem esize (opcode:num) elements k
+      (n:word128) (m:word128) =
+    let part = if opcode < 4 then 0 else 1;
+        pair = k DIV 2;
+        index = if opcode = 1 ∨ opcode = 5 then 2 * k + part
+                else if opcode = 2 ∨ opcode = 6 then 2 * pair + part
+                else pair + part * (elements DIV 2)
+    in if opcode = 1 ∨ opcode = 5 then simd_pair_elem esize elements index n m
+       else elem esize index (if k MOD 2 = 0 then n else m)
+End
+
+Definition simd_permute_lanes_def:
+  simd_permute_lanes esize opcode elements 0 n m = (0w:word128) ∧
+  simd_permute_lanes esize opcode elements (SUC k) n m =
+    simd_permute_lanes esize opcode elements k n m ||
+    put_lane esize k (simd_permute_elem esize opcode elements k n m)
+End
+
+Definition simd_permute_value_def:
+  simd_permute_value q (sz:word2) (opcode:word3) n m =
+    let esize = 8 * 2 ** w2n sz;
+        elements = (if q then 128 else 64) DIV esize
+    in simd_permute_lanes esize (w2n opcode) elements elements n m
+End
+
+Definition simd_table_byte_def:
+  simd_table_byte (regs:num) index table0 table1 table2 table3 (old:word64) =
+    let bytes = 16 in
+    if index < bytes then elem 8 index table0
+    else if regs > 1 ∧ index < 2 * bytes then elem 8 (index - bytes) table1
+    else if regs > 2 ∧ index < 3 * bytes then elem 8 (index - 2 * bytes) table2
+    else if regs > 3 ∧ index < 4 * bytes then elem 8 (index - 3 * bytes) table3
+    else old
+End
+
+Definition simd_table_lanes_def:
+  simd_table_lanes (regs:num) 0 table0 table1 table2 table3 indices old =
+    (0w:word128) ∧
+  simd_table_lanes regs (SUC k) table0 table1 table2 table3 indices old =
+    simd_table_lanes regs k table0 table1 table2 table3 indices old ||
+    put_lane 8 k (simd_table_byte regs (w2n (elem 8 k indices))
+      table0 table1 table2 table3 (elem 8 k old))
+End
+
+Definition simd_table_value_def:
+  simd_table_value q is_tbl (len:word2) table0 table1 table2 table3
+      indices old =
+    let elements = if q then 16 else 8;
+        regs = w2n len + 1
+    in simd_table_lanes regs elements table0 table1 table2 table3 indices
+         (if is_tbl then 0w else old)
+End
+
+Definition simd_extract_value_def:
+  simd_extract_value q (imm4:word4) lo hi =
+    let shift = 8 * w2n imm4;
+        low = simd_lane_mask 64;
+        value = if q then (lo >>> shift) || (hi << (128 - shift))
+                else ((lo && low) >>> shift) || ((hi && low) << (64 - shift))
+    in if q then value else value && low
+End
+
 Definition elem_int_def:
   elem_int unsigned esize (x:word64) : int =
     if ¬unsigned ∧ word_bit (esize - 1) x then &w2n x - &(2 ** esize) else &w2n x
+End
+
+Definition simd_copy_gpr_def:
+  simd_copy_gpr q signed esize (x:word64) =
+    let value : word64 = if signed then i2w (elem_int F esize x) else x
+    in if q then value else w2w (w2w value : word32)
 End
 
 (* SatQ: clamp to the unsigned or signed range of esize bits. *)
