@@ -7,6 +7,8 @@
 #
 # usage: generate.sh <sail-arm checkout> <work directory>
 #
+# The work directory must be new or empty: the script fills it.
+#
 # Steps:
 #  1. sail -lem on the A64 sources only (no A32, SVE, SME or devices), with
 #     flat identity memory (sail/flat_memory.*) and UNKNOWN as HOL's ARB
@@ -26,7 +28,11 @@ model=$here/../model
 libs=(-lib "$here/lem-lib" -lib "$share/lib/hol" -lib "$share/src/gen_lib")
 
 # 1. Sail to Lem
-rm -rf "$work"; mkdir -p "$work"; cp -r "$spec/arm-v9.4-a/src" "$work/src"
+if [ -e "$work" ] && [ -n "$(ls -A "$work")" ]; then
+  echo "generate.sh: $work is not empty; give a new or empty work directory" >&2
+  exit 1
+fi
+mkdir -p "$work"; cp -r "$spec/arm-v9.4-a/src" "$work/src"
 cd "$work"
 patch -p1 < "$here/sail/flat_memory.patch"
 mkdir -p lem isabelle

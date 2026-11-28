@@ -19,13 +19,16 @@ holbuild check armv9_typesTheory armv9_p{1..32}Theory arm64AslTheory aslLemmasTh
   `ARB`), and `ConstrainUnpredictable` making the choices of Arm's
   Armv9.3-A specification. It is split into the theories `armv9_p1` to
   `armv9_p32`; each opens only the earlier parts it uses, so independent
-  parts build in parallel.
+  parts build in parallel. `armv9_p32` holds `ExecuteA64` and has the whole
+  model as ancestors: it is the theory to open.
 - `lib/` holds the Lem and Sail support libraries the model needs.
 - `gen/generate.sh` regenerates `model/`; its header says how.
 - `proofs/` relates the two. `arm64Asl` defines the state relation, the
   system configuration `arm64-hol` assumes, the specification's step, and
-  `asl_complete`, the statement that the specification simulates every
-  instruction `arm64-hol` decodes. `aslSim` proves the simulation so far:
+  `asl_complete`, the converse of the simulation (not yet proved): whenever
+  the specification steps from a related state, `arm64-hol` decodes the
+  instruction and its step reaches a related state, so an instruction
+  `arm64-hol` lacks can't go unnoticed. `aslSim` proves the simulation so far:
   NOP, ADD/SUB (immediate), FMOV (general to vector), and 64-bit LDR and
   STR (immediate, unsigned offset) at any address. Evaluating one
   instruction in the specification takes from about 0.3 s (ADD) to 8.5 s
