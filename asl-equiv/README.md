@@ -27,7 +27,9 @@ holbuild check armv9_typesTheory armv9_p{1..32}Theory arm64AslTheory aslLemmasTh
   `asl_complete`, the statement that the specification simulates every
   instruction `arm64-hol` decodes. `aslSim` proves the simulation so far:
   NOP, ADD/SUB (immediate), FMOV (general to vector), and 64-bit LDR and
-  STR (immediate, unsigned offset) at any address. `aslNonVacuity` and
+  STR (immediate, unsigned offset) at any address. Evaluating one
+  instruction in the specification takes from about 0.3 s (ADD) to 8.5 s
+  (LDR), split into proof steps of at most about 2 s. `aslNonVacuity` and
   `aslDecodeNonVacuity` show that the hypotheses hold for some states.
 
 `lib/` is Lem's and Sail's HOL4 output as they ship it. Lem leaves 34 of

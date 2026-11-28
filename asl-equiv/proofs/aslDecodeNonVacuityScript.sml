@@ -100,7 +100,8 @@ Proof
   strip_tac >> drule near0_indexed >> disch_then (qspec_then `mode` assume_tac) >>
   `2 ** transfer_scale vec opc size ≤ 1024`
     by (Cases_on_word_value `size` >> rw[transfer_scale_def]) >>
-  rw[execute_mem_def, witness_regs, check_sp_def, access_ok_read, access_ok_write]
+  rw[execute_mem_def, witness_regs, check_sp_def, access_ok_read] >>
+  gvs[access_ok_write]
 QED
 
 
@@ -155,11 +156,59 @@ Proof
   EVAL_TAC
 QED
 
+Theorem access_ok_write_0[local]:
+  n ≤ 1024 ⇒ access_ok functional_storage Write n (decode_witness w) 0w
+Proof
+  strip_tac >> irule access_ok_write >> simp[near0_0]
+QED
+
+Theorem multi_total_le[local]:
+  x ≤ 4 ⇒
+  x * ((if q then 16 else 8) DIV 2 ** w2n (size:word2)) * 2 ** w2n size ≤ 1024
+Proof
+  strip_tac >> Cases_on `q` >> Cases_on_word_value `size` >> simp[]
+QED
+
+Theorem execute_multi_witness[local]:
+  ∃s'. execute_multi functional_storage q load post m opc size t n
+         (decode_witness w) = Next s'
+Proof
+  `FST (multi_layout opc) * SND (multi_layout opc) ≤ 4`
+    by rw[multi_layout_def] >>
+  Cases_on `multi_layout opc` >> gvs[] >>
+  rw[execute_multi_def, witness_regs, check_sp_def, access_ok_read] >>
+  gvs[access_ok_write_0, multi_total_le]
+QED
+
+Theorem lane_total_le[local]:
+  (2 * (w2n (opc:word3) MOD 2) + (if r then 2 else 1)) *
+  FST (lane_layout q opc sb size) ≤ 1024
+Proof
+  `FST (lane_layout q opc sb size) ≤ 8`
+    by (rw[lane_layout_def] >> Cases_on_word_value `size` >> simp[]) >>
+  `2 * (w2n opc MOD 2) + (if r then 2 else 1) ≤ 4`
+    by (`w2n opc MOD 2 < 2` by simp[] >> rw[]) >>
+  `(2 * (w2n opc MOD 2) + (if r then 2 else 1)) *
+   FST (lane_layout q opc sb size) ≤ 4 * 8` suffices_by simp[] >>
+  irule arithmeticTheory.LESS_MONO_MULT2 >> simp[]
+QED
+
+Theorem execute_lane_witness[local]:
+  ∃s'. execute_lane functional_storage q load post m r opc sb size t n
+         (decode_witness w) = Next s'
+Proof
+  assume_tac lane_total_le >>
+  Cases_on `lane_layout q opc sb size` >> gvs[] >>
+  rw[execute_lane_def, witness_regs, check_sp_def, access_ok_read] >>
+  gvs[access_ok_write_0]
+QED
+
 Theorem execute_witness[local]:
   ∃s'. execute_with functional_storage i (decode_witness w) = Next s'
 Proof
   Cases_on `i` >>
-  rw[execute_with_def, access_ok_read, execute_pair_witness, witness_regs,
+  rw[execute_with_def, access_ok_read, execute_pair_witness,
+     execute_multi_witness, execute_lane_witness, witness_regs,
      extend_reg_0, wordsTheory.ZERO_SHIFT] >>~-
   ([`execute_mem`],
    BasicProvers.every_case_tac >> irule execute_mem_witness >>

@@ -71,7 +71,8 @@ cmp names.json names2.json
 (cd "$here/lem-lib" && lem -hol -outdir "$work/hol-lib" -auxiliary_level none \
    -lib . -lib "$share/lib/hol" -lib "$share/src/gen_lib" *.lem)
 
-# 4. Adapt and install
+# 4. Adapt and install, replacing the previous export
+rm -f "$model"/*Script.sml
 cp hol/*Script.sml "$model/"
 cp hol-lib/*Script.sml "$here/../lib/sail/"
 bash "$here/fix-hol.sh" "$model"/*Script.sml "$here"/../lib/sail/sail2_{concurrency_interface,monadic_combinators,undefined_concurrency_interface}Script.sml
