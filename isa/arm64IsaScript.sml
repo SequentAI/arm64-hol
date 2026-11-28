@@ -9,12 +9,14 @@ val () = app (fn n =>
 
 Datatype:
   arm64_feat = <| asimd : bool; crc32 : bool; aes : bool; pmull : bool;
+                  dotprod : bool; i8mm : bool; rdm : bool;
                   sha1 : bool; sha256 : bool; sha512 : bool; sha3 : bool;
                   sm3 : bool; sm4 : bool |>
 End
 
 Definition armv9_4_def:
   armv9_4 = <| asimd := T; crc32 := T; aes := T; pmull := T;
+               dotprod := T; i8mm := T; rdm := T;
                sha1 := T; sha256 := T; sha512 := T; sha3 := T;
                sm3 := T; sm4 := T |>
 End
@@ -72,10 +74,6 @@ Datatype:
 End
 
 Datatype:
-  simd_shift = Shl | Ushr | Sri
-End
-
-Datatype:
   simd_transfer = FmovW | FmovX | UmovB0 | UmovD1 | Dup2D | FmovToD
 End
 
@@ -121,7 +119,9 @@ Datatype:
   | SimdTwoMisc bool bool bool word2 word5 word5 word5
   | SimdAcross bool bool bool word2 word5 word5 word5
   | Crc32 bool word2 word5 word5 word5
-  | Pmull bool word5 word5 word5
+  | SimdThreeDifferent bool bool bool word2 word5 word5 word5 word5
+  | SimdByElement bool bool bool word2 bool bool word4 word4 bool word5 word5
+  | SimdThreeExtension bool bool bool word2 word5 word5 word5 word5
   | Aes aes_op word5 word5
   | ShaThree word3 word5 word5 word5
   | ShaTwo word5 word5 word5
@@ -132,7 +132,7 @@ Datatype:
   | CryptoTwo word2 word5 word5
   | SimdTable bool word5 word5 word5
   | SimdExtract word5 word5 word5 word4
-  | SimdShift simd_shift word5 word5 word7
+  | SimdShiftImm bool bool bool word4 word3 word5 word5 word5
   | SimdTransfer simd_transfer word5 word5
   | Nop
 End
@@ -359,15 +359,45 @@ Definition simd_transfer_base_def:
   simd_transfer_base FmovToD = 0x9e670000w
 End
 
-Definition simd_shift_base_def:
-  simd_shift_base Shl = 0x4f005400w ∧
-  simd_shift_base Ushr = 0x6f000400w ∧
-  simd_shift_base Sri = 0x6f004400w
+Definition simd_shift_imm_ok_def:
+  simd_shift_imm_ok scalar q u (immh:word4) (opc:word5) ⇔
+    let code = w2n opc; high = word_bit 3 immh in
+    immh ≠ 0w ∧
+    (if scalar then q else ¬high ∨ q) ∧
+    (if MEM code [0; 2; 4; 6; 8; 10] then
+       (code ≠ 8 ∨ u) ∧ (¬scalar ∨ high)
+     else if code = 12 then u
+     else if code = 14 then T
+     else if code = 16 ∨ code = 17 then ¬high ∧ (¬scalar ∨ u)
+     else if code = 18 ∨ code = 19 then ¬high
+     else code = 20 ∧ ¬scalar ∧ ¬high)
 End
 
-(* The high bits of immh:immb select a 32- or 64-bit lane. *)
-Definition simd_shift_imm_ok_def:
-  simd_shift_imm_ok (imm:word7) ⇔ 32 ≤ w2n imm
+Definition three_different_ok_def:
+  three_different_ok scalar q u (size:word2) (opc:word5) ⇔
+    let code = w2n opc in
+    if MEM code [18; 22; 26] then
+      ¬u ∧ (¬scalar ∨ q) ∧ (size = 1w ∨ size = 2w)
+    else if code = 28 then ¬scalar ∧ ¬u ∧ (size = 0w ∨ size = 3w)
+    else ¬scalar ∧ size ≠ 3w ∧ MEM code [0; 2; 4; 6; 8; 10; 12; 14; 16; 20; 24]
+End
+
+Definition by_element_ok_def:
+  by_element_ok scalar q u (size:word2) (opc:word4) ⇔
+    let code = w2n opc; hs = (size = 1w ∨ size = 2w) in
+    if scalar then
+      q ∧ hs ∧ (if u then code = 13 ∨ code = 15 else MEM code [3; 7; 11; 12; 13])
+    else if code = 14 then size = 2w
+    else if code = 15 ∧ ¬u then size = 0w ∨ size = 2w
+    else hs ∧ (if u then MEM code [0; 2; 4; 6; 10; 13; 15]
+               else MEM code [2; 3; 6; 7; 8; 10; 11; 12; 13])
+End
+
+Definition three_extension_ok_def:
+  three_extension_ok scalar q u (size:word2) (opc:word5) ⇔
+    if opc = 16w ∨ opc = 17w then u ∧ (¬scalar ∨ q) ∧ (size = 1w ∨ size = 2w)
+    else ¬scalar ∧ size = 2w ∧
+         (opc = 18w ∨ (opc = 19w ∧ ¬u) ∨ (q ∧ (opc = 20w ∨ (opc = 21w ∧ ¬u))))
 End
 
 Definition aes_base_def:
@@ -383,10 +413,17 @@ Definition classify_simd_def:
       SOME (SimdImm (word_bit 30 w) (word_bit 29 w) (w2w (w >>> 12))
               (w2w (w >>> 11) && 0xe0w || w2w (w >>> 5) && 31w) d)
     else
-      let binary = w && 0xffe0fc00w; unary = w && 0xfffffc00w;
-          shift = w && 0xff80fc00w; imm : word7 = w2w (w >>> 16)
+      let binary = w && 0xffe0fc00w; unary = w && 0xfffffc00w
       in
-      if w && 0x8f200400w = 0x0e200400w then
+      (* The scalar FP register transfers overlap the integer three-different
+         mask.  Recognize the exact transfer forms before the broad groups. *)
+      if unary = simd_transfer_base FmovW then SOME (SimdTransfer FmovW d n)
+      else if unary = simd_transfer_base FmovX then SOME (SimdTransfer FmovX d n)
+      else if unary = simd_transfer_base UmovB0 then SOME (SimdTransfer UmovB0 d n)
+      else if unary = simd_transfer_base UmovD1 then SOME (SimdTransfer UmovD1 d n)
+      else if unary = simd_transfer_base Dup2D then SOME (SimdTransfer Dup2D d n)
+      else if unary = simd_transfer_base FmovToD then SOME (SimdTransfer FmovToD d n)
+      else if w && 0x8f200400w = 0x0e200400w then
         SOME (SimdThreeSame (word_bit 28 w) (word_bit 30 w) (word_bit 29 w)
                 (w2w (w >>> 22)) (w2w (w >>> 11)) d n m)
       else if w && 0x8f3e0c00w = 0x0e200800w then
@@ -395,8 +432,6 @@ Definition classify_simd_def:
       else if w && 0x8f3e0c00w = 0x0e300800w then
         SOME (SimdAcross (word_bit 28 w) (word_bit 30 w) (word_bit 29 w)
                 (w2w (w >>> 22)) (w2w (w >>> 12)) d n)
-      else if feat.pmull ∧ w && 0xbfe0fc00w = 0x0ee0e000w then
-        SOME (Pmull (word_bit 30 w) d n m)
       else if feat.aes ∧ unary = aes_base Aese then SOME (Aes Aese d n)
       else if feat.aes ∧ unary = aes_base Aesd then SOME (Aes Aesd d n)
       else if feat.aes ∧ unary = aes_base Aesmc then SOME (Aes Aesmc d n)
@@ -426,18 +461,41 @@ Definition classify_simd_def:
       else if binary = 0x4e001000w then SOME (SimdTable T d n m)
       else if w && 0xffe08400w = 0x6e000000w then
         SOME (SimdExtract d n m (w2w (w >>> 11)))
-      else if shift = simd_shift_base Shl ∧ simd_shift_imm_ok imm then
-        SOME (SimdShift Shl d n imm)
-      else if shift = simd_shift_base Ushr ∧ simd_shift_imm_ok imm then
-        SOME (SimdShift Ushr d n imm)
-      else if shift = simd_shift_base Sri ∧ simd_shift_imm_ok imm then
-        SOME (SimdShift Sri d n imm)
-      else if unary = simd_transfer_base FmovW then SOME (SimdTransfer FmovW d n)
-      else if unary = simd_transfer_base FmovX then SOME (SimdTransfer FmovX d n)
-      else if unary = simd_transfer_base UmovB0 then SOME (SimdTransfer UmovB0 d n)
-      else if unary = simd_transfer_base UmovD1 then SOME (SimdTransfer UmovD1 d n)
-      else if unary = simd_transfer_base Dup2D then SOME (SimdTransfer Dup2D d n)
-      else if unary = simd_transfer_base FmovToD then SOME (SimdTransfer FmovToD d n)
+      else if w && 0x8f200400w = 0x0e000400w then
+        let scalar = word_bit 28 w; q = word_bit 30 w; u = word_bit 29 w;
+            size : word2 = w2w (w >>> 22);
+            code : word5 = w2w (w >>> 11)
+        in if three_extension_ok scalar q u size code ∧
+              (if code = 16w ∨ code = 17w then feat.rdm
+               else if code = 18w then feat.dotprod
+               else feat.i8mm)
+           then SOME (SimdThreeExtension scalar q u size code d n m)
+           else NONE
+      else if w && 0x8f200400w = 0x0e200000w then
+        let scalar = word_bit 28 w; q = word_bit 30 w; u = word_bit 29 w;
+            size : word2 = w2w (w >>> 22);
+            code : word5 = w2w (w >>> 11)
+        in if three_different_ok scalar q u size code ∧
+              (code ≠ 28w ∨ size ≠ 3w ∨ feat.pmull)
+           then SOME (SimdThreeDifferent scalar q u size code d n m)
+           else NONE
+      else if w && 0x8f000400w = 0x0f000000w then
+        let scalar = word_bit 28 w; q = word_bit 30 w; u = word_bit 29 w;
+            size : word2 = w2w (w >>> 22); l = word_bit 21 w; h = word_bit 11 w;
+            code : word4 = w2w (w >>> 12); mbit = word_bit 20 w;
+            rm : word4 = w2w (w >>> 16)
+        in if by_element_ok scalar q u size code ∧
+              (if u ∧ (code = 13w ∨ code = 15w) then feat.rdm
+               else if code = 14w then feat.dotprod
+               else if code = 15w then feat.i8mm else T)
+           then SOME (SimdByElement scalar q u size l mbit rm code h d n)
+           else NONE
+      else if w && 0x8f000400w = 0x0f000400w then
+        let scalar = word_bit 28 w; q = word_bit 30 w; u = word_bit 29 w;
+            immh : word4 = w2w (w >>> 19); immb : word3 = w2w (w >>> 16);
+            code : word5 = w2w (w >>> 11)
+        in if simd_shift_imm_ok scalar q u immh code
+           then SOME (SimdShiftImm scalar q u immh immb code d n) else NONE
       else NONE
 End
 
@@ -585,8 +643,23 @@ Definition encode_def:
   encode (Crc32 castagnoli size d n m) =
     SOME (0x1ac04000w || flag_field (size = 3w) 31 || flag_field castagnoli 12 ||
           insert_field 10 size || reg_fields d n m) ∧
-  encode (Pmull high d n m) =
-    SOME (0x0ee0e000w || flag_field high 30 || reg_fields d n m) ∧
+  encode (SimdThreeDifferent scalar q u size opc d n m) =
+    (if three_different_ok scalar q u size opc then
+       SOME (0x0e200000w || flag_field scalar 28 || flag_field q 30 || flag_field u 29 ||
+             insert_field 22 size || insert_field 11 opc || reg_fields d n m)
+     else NONE) ∧
+  encode (SimdByElement scalar q u size l mbit rm opc h d n) =
+    (if by_element_ok scalar q u size opc then
+       SOME (0x0f000000w || flag_field scalar 28 || flag_field q 30 || flag_field u 29 ||
+             insert_field 22 size || flag_field l 21 || flag_field mbit 20 ||
+             insert_field 16 rm || insert_field 12 opc || flag_field h 11 ||
+             insert_field 0 d || insert_field 5 n)
+     else NONE) ∧
+  encode (SimdThreeExtension scalar q u size opc d n m) =
+    (if three_extension_ok scalar q u size opc then
+       SOME (0x0e000400w || flag_field scalar 28 || flag_field q 30 || flag_field u 29 ||
+             insert_field 22 size || insert_field 11 opc || reg_fields d n m)
+     else NONE) ∧
   encode (Aes op d n) = SOME (aes_base op || reg_fields d n 0w) ∧
   encode (ShaThree opc d n m) =
     (if w2n opc < 7 then SOME (0x5e000000w || insert_field 12 opc || reg_fields d n m)
@@ -614,9 +687,11 @@ Definition encode_def:
     SOME (0x4e000000w || flag_field extend 12 || reg_fields d n m) ∧
   encode (SimdExtract d n m imm) =
     SOME (0x6e000000w || reg_fields d n m || insert_field 11 imm) ∧
-  encode (SimdShift op d n imm) =
-    (if simd_shift_imm_ok imm then
-       SOME (simd_shift_base op || reg_fields d n 0w || insert_field 16 imm)
+  encode (SimdShiftImm scalar q u immh immb opc d n) =
+    (if simd_shift_imm_ok scalar q u immh opc then
+       SOME (0x0f000400w || flag_field scalar 28 || flag_field q 30 || flag_field u 29 ||
+             insert_field 19 immh || insert_field 16 immb || insert_field 11 opc ||
+             insert_field 0 d || insert_field 5 n)
      else NONE) ∧
   encode (SimdTransfer op d n) =
     SOME (simd_transfer_base op || reg_fields d n 0w) ∧
@@ -1150,30 +1225,6 @@ Definition simd_ext_def:
     (lo >>> (8 * bytes)) || (hi << (128 - 8 * bytes))
 End
 
-Definition simd_shift_lane_def:
-  simd_shift_lane Shl width amount (x:word128) old =
-    (x << amount) && simd_lane_mask width ∧
-  simd_shift_lane Ushr width amount x old =
-    (x && simd_lane_mask width) >>> amount ∧
-  simd_shift_lane Sri width amount x old =
-    (let mask = simd_lane_mask width in
-       ((x && mask) >>> amount) || (old && (mask << (width - amount)) && mask))
-End
-
-Definition simd_shift_lanes_def:
-  simd_shift_lanes 0 op width amount (x:word128) old = (0w:word128) ∧
-  simd_shift_lanes (SUC n) op width amount x old =
-    simd_shift_lane op width amount x old ||
-    (simd_shift_lanes n op width amount (x >>> width) (old >>> width) << width)
-End
-
-Definition simd_shift_value_def:
-  simd_shift_value op (imm:word7) x old =
-    (let bits = w2n imm; width = if bits < 64 then 32 else 64;
-         amount = if op = Shl then bits - width else 2 * width - bits
-     in simd_shift_lanes (128 DIV width) op width amount x old)
-End
-
 Definition simd_extract_def:
   simd_extract FmovW (v:word128) = (w2w (w2w v : word32) : word64) ∧
   simd_extract FmovX v = w2w v ∧
@@ -1310,9 +1361,19 @@ Definition execute_with_def:
   execute_with ops (Crc32 castagnoli size d n m) s =
     Next (advance (set_gpr ops d
       (w2w (crc32_value castagnoli size (w2w (gpr ops s n)) (gpr ops s m))) s)) ∧
-  execute_with ops (Pmull high d n m) s =
+  execute_with ops (SimdThreeDifferent scalar q u size opc d n m) s =
     Next (advance (s with vregs := ops.put_vec d
-      (pmull_value high (ops.get_vec s.vregs n) (ops.get_vec s.vregs m)) s.vregs)) ∧
+      (three_diff_value scalar q u size opc (ops.get_vec s.vregs n)
+         (ops.get_vec s.vregs m) (ops.get_vec s.vregs d)) s.vregs)) ∧
+  execute_with ops (SimdByElement scalar q u size l mbit rm opc h d n) s =
+    Next (advance (s with vregs := ops.put_vec d
+      (by_element_value scalar q u size l mbit opc h (ops.get_vec s.vregs n)
+         (ops.get_vec s.vregs ((w2w rm : word5) || (if size ≠ 1w ∧ mbit then 16w else 0w)))
+         (ops.get_vec s.vregs d)) s.vregs)) ∧
+  execute_with ops (SimdThreeExtension scalar q u size opc d n m) s =
+    Next (advance (s with vregs := ops.put_vec d
+      (extension_value scalar q u size opc (ops.get_vec s.vregs n)
+         (ops.get_vec s.vregs m) (ops.get_vec s.vregs d)) s.vregs)) ∧
   execute_with ops (Aes op d n) s =
     Next (advance (s with vregs := ops.put_vec d
       (aes_value op (ops.get_vec s.vregs d) (ops.get_vec s.vregs n)) s.vregs)) ∧
@@ -1344,9 +1405,10 @@ Definition execute_with_def:
   execute_with ops (SimdExtract d n m imm) s =
     Next (advance (s with vregs := ops.put_vec d
       (simd_ext (w2n imm) (ops.get_vec s.vregs n) (ops.get_vec s.vregs m)) s.vregs)) ∧
-  execute_with ops (SimdShift op d n imm) s =
+  execute_with ops (SimdShiftImm scalar q u immh immb opc d n) s =
     Next (advance (s with vregs := ops.put_vec d
-      (simd_shift_value op imm (ops.get_vec s.vregs n) (ops.get_vec s.vregs d)) s.vregs)) ∧
+      (shift_imm_value scalar q u immh immb opc (ops.get_vec s.vregs n)
+         (ops.get_vec s.vregs d)) s.vregs)) ∧
   execute_with ops (SimdTransfer op d n) s =
     (if op = Dup2D then
        let x : word128 = w2w (gpr ops s n) in

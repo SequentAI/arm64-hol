@@ -103,7 +103,9 @@ fun check i =
                   SOME (_, base) => base
                 | NONE => 0
     val base = numSyntax.term_of_int vbase
-    val result = EQT_ELIM (cv_eval ``agrees_at ^base ^(rhs (concl def))``)
+    val verdict = cv_eval ``agrees_at ^base ^(rhs (concl def))``
+    val result = EQT_ELIM verdict
+      handle HOL_ERR _ => raise Fail (name ^ ": native observation disagrees with step_cv")
   in
     ignore (save_thm (name ^ "_agrees",
       PURE_REWRITE_RULE [GSYM def, GSYM agrees_def] result))
@@ -147,8 +149,8 @@ val () = check_fault "crc_rejects_wrong_sf" enabled
   ``test_state 0x1ac15c00w ^initial`` ``Unsupported``;
 val () = check_fault "pmull_requires_pmull" ``^enabled with pmull := F``
   ``test_state 0x4ee1e000w ^initial`` ``Unsupported``;
-val () = check_fault "pmull_rejects_unsupported_8h_form" enabled
-  ``test_state 0x0e21e000w ^initial`` ``Unsupported``;
+val () = check_fault "pmull_rejects_reserved_4s_form" enabled
+  ``test_state 0x0ea1e000w ^initial`` ``Unsupported``;
 val () = check_fault "aese_requires_aes" ``^enabled with aes := F``
   ``test_state 0x4e284820w ^initial`` ``Unsupported``;
 val () = check_fault "aese_requires_asimd" ``^enabled with asimd := F``
@@ -217,8 +219,6 @@ val () = check_fault "ext_64bit_arrangement_is_unsupported" enabled
   ``test_state 0x2e010000w ^initial`` ``Unsupported``;
 val () = check_fault "rev32_rejects_reserved_size" enabled
   ``test_state 0x6ea00800w ^initial`` ``Unsupported``;
-val () = check_fault "shl_16bit_lanes_are_unsupported" enabled
-  ``test_state 0x4f105400w ^initial`` ``Unsupported``;
 val q_store = ``test_state 0x3d800020w ^initial``;
 val () = check_fault "q_store_rejects_unwritable_last_byte" enabled
   ``^q_store with perms := insert 4111 (perm T F F) (^q_store).perms`` ``Store``;
@@ -279,6 +279,27 @@ val () = app (fn (name, feat, word) =>
    ("sm3tt2b", ``^enabled with sm3 := F``, ``0xce429c20w : word32``),
    ("sm4ekey", ``^enabled with sm4 := F``, ``0xce62c820w : word32``),
    ("sm4e", ``^enabled with sm4 := F``, ``0xcec08420w : word32``)];
+val () = app (fn (name, feat, word) =>
+    check_fault (name ^ "_requires_its_feature") feat
+      ``test_state ^word ^initial`` ``Unsupported``)
+  [("sdot_vec", ``^enabled with dotprod := F``, ``0x4e9e97bcw : word32``),
+   ("udot_vec", ``^enabled with dotprod := F``, ``0x6e9e97bcw : word32``),
+   ("sdot_elt", ``^enabled with dotprod := F``, ``0x4f9eebbcw : word32``),
+   ("udot_elt", ``^enabled with dotprod := F``, ``0x6f9eebbcw : word32``),
+   ("usdot_vec", ``^enabled with i8mm := F``, ``0x4e9e9fbcw : word32``),
+   ("sudot_elt", ``^enabled with i8mm := F``, ``0x4f1efbbcw : word32``),
+   ("usdot_elt", ``^enabled with i8mm := F``, ``0x4f9efbbcw : word32``),
+   ("smmla", ``^enabled with i8mm := F``, ``0x4e9ea7bcw : word32``),
+   ("ummla", ``^enabled with i8mm := F``, ``0x6e9ea7bcw : word32``),
+   ("usmmla", ``^enabled with i8mm := F``, ``0x4e9eafbcw : word32``),
+   ("sqrdmlah_vec", ``^enabled with rdm := F``, ``0x6e5e87bcw : word32``),
+   ("sqrdmlsh_vec", ``^enabled with rdm := F``, ``0x6e5e8fbcw : word32``),
+   ("sqrdmlah_elt", ``^enabled with rdm := F``, ``0x6f5ed9acw : word32``),
+   ("sqrdmlsh_elt", ``^enabled with rdm := F``, ``0x6f5ef9acw : word32``),
+   ("sqrdmlah_scalar", ``^enabled with rdm := F``, ``0x7e5e87bcw : word32``),
+   ("sqrdmlsh_scalar", ``^enabled with rdm := F``, ``0x7e5e8fbcw : word32``),
+   ("sqrdmlah_scalar_elt", ``^enabled with rdm := F``, ``0x7f5ed9acw : word32``),
+   ("sqrdmlsh_scalar_elt", ``^enabled with rdm := F``, ``0x7f5ef9acw : word32``)];
 val () = check_fault "umulh_rejects_reserved_accumulator" enabled
   ``test_state 0x9bc07800w ^initial`` ``Unsupported``;
 val no_asimd = EVAL ``^enabled with asimd := F``;

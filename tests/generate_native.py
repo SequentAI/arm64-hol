@@ -435,23 +435,23 @@ PERMUTE_PROBES = [
     ("tbx", "SimdTable T 30w 30w 31w", "tbx v30.16b,{v30.16b},v31.16b", -1),
     ("ext_0", "SimdExtract 31w 30w 31w 0w", "ext v31.16b,v30.16b,v31.16b,#0", -1),
     ("ext_15", "SimdExtract 30w 30w 31w 15w", "ext v30.16b,v30.16b,v31.16b,#15", -1),
-    ("shl_4s", "SimdShift Shl 30w 31w 63w", "shl v30.4s,v31.4s,#31", -1),
-    ("shl_2d", "SimdShift Shl 31w 30w 64w", "shl v31.2d,v30.2d,#0", -1),
-    ("ushr_4s", "SimdShift Ushr 31w 30w 63w", "ushr v31.4s,v30.4s,#1", -1),
-    ("ushr_2d", "SimdShift Ushr 31w 30w 64w", "ushr v31.2d,v30.2d,#64", -1),
-    ("sri_4s", "SimdShift Sri 31w 30w 32w", "sri v31.4s,v30.4s,#32", -1),
-    ("sri_2d", "SimdShift Sri 30w 31w 88w", "sri v30.2d,v31.2d,#40", -1),
+    ("shl_4s", "SimdShiftImm F T F 7w 7w 10w 30w 31w", "shl v30.4s,v31.4s,#31", -1),
+    ("shl_2d", "SimdShiftImm F T F 8w 0w 10w 31w 30w", "shl v31.2d,v30.2d,#0", -1),
+    ("ushr_4s", "SimdShiftImm F T T 7w 7w 0w 31w 30w", "ushr v31.4s,v30.4s,#1", -1),
+    ("ushr_2d", "SimdShiftImm F T T 8w 0w 0w 31w 30w", "ushr v31.2d,v30.2d,#64", -1),
+    ("sri_4s", "SimdShiftImm F T T 4w 0w 8w 31w 30w", "sri v31.4s,v30.4s,#32", -1),
+    ("sri_2d", "SimdShiftImm F T T 11w 0w 8w 30w 31w", "sri v30.2d,v31.2d,#40", -1),
     ("tbx_distinct_table", "SimdTable T 31w 30w 31w", "tbx v31.16b,{v30.16b},v31.16b", -1),
-    ("shl_2d_interior", "SimdShift Shl 31w 30w 81w", "shl v31.2d,v30.2d,#17", -1),
-    ("ushr_2d_interior", "SimdShift Ushr 31w 30w 115w", "ushr v31.2d,v30.2d,#13", -1),
-    ("sri_4s_interior", "SimdShift Sri 31w 30w 51w", "sri v31.4s,v30.4s,#13", -1),
+    ("shl_2d_interior", "SimdShiftImm F T F 10w 1w 10w 31w 30w", "shl v31.2d,v30.2d,#17", -1),
+    ("ushr_2d_interior", "SimdShiftImm F T T 14w 3w 0w 31w 30w", "ushr v31.2d,v30.2d,#13", -1),
+    ("sri_4s_interior", "SimdShiftImm F T T 6w 3w 8w 31w 30w", "sri v31.4s,v30.4s,#13", -1),
 ]
 PERMUTE_SIMD_PROBES = [(name, instr, asm, ptr, (), 30)
                        for name, instr, asm, ptr in PERMUTE_PROBES]
 
 CRYPTO_SIMD_PROBES = [
-    ("pmull", "Pmull F 30w 30w 31w", "pmull v30.1q,v30.1d,v31.1d", -1, (), 30),
-    ("pmull2", "Pmull T 31w 30w 31w", "pmull2 v31.1q,v30.2d,v31.2d", -1, (), 30),
+    ("pmull", "SimdThreeDifferent F F F 3w 28w 30w 30w 31w", "pmull v30.1q,v30.1d,v31.1d", -1, (), 30),
+    ("pmull2", "SimdThreeDifferent F T F 3w 28w 31w 30w 31w", "pmull2 v31.1q,v30.2d,v31.2d", -1, (), 30),
     ("aese", "Aes Aese 30w 31w", "aese v30.16b,v31.16b", -1, (), 30),
     ("aesd", "Aes Aesd 30w 31w", "aesd v30.16b,v31.16b", -1, (), 30),
     ("aesmc", "Aes Aesmc 31w 30w", "aesmc v31.16b,v30.16b", -1, (), 30),
@@ -542,11 +542,11 @@ def arrangement(size: int, q: int) -> str:
     return f"{(64 << q) >> (3 + size)}{SIZES[size]}"
 
 
-def add_integer(name: str, instruction: str, assembly: str) -> None:
+def add_integer(name: str, instruction: str, assembly: str, base: int = 28) -> None:
     mnemonic, _, operands = assembly.partition(" ")
     aliases = ((f"{INTEGER_ALIASES[mnemonic]} {operands}",)
                if mnemonic in INTEGER_ALIASES else ())
-    INTEGER_PROBES.append((name, instruction, assembly, -1, aliases, 28))
+    INTEGER_PROBES.append((name, instruction, assembly, -1, aliases, base))
 
 
 def flag(b: int) -> str:
@@ -613,8 +613,139 @@ def build_integer_probes() -> None:
                             f"{mnemonic} {result}28,v29.{arrangement(size, q)}")
     add_integer("addp_d", "SimdAcross T T F 3w 27w 28w 29w", "addp d28,v29.2d")
 
+def build_shift_probes() -> None:
+    forms = [
+        ("sshr", 0, 0), ("ushr", 1, 0), ("ssra", 0, 2), ("usra", 1, 2),
+        ("srshr", 0, 4), ("urshr", 1, 4), ("srsra", 0, 6), ("ursra", 1, 6),
+        ("sri", 1, 8), ("shl", 0, 10), ("sli", 1, 10), ("sqshlu", 1, 12),
+        ("sqshl", 0, 14), ("uqshl", 1, 14),
+        ("shrn", 0, 16), ("rshrn", 0, 17),
+        ("sqshrun", 1, 16), ("sqrshrun", 1, 17),
+        ("sqshrn", 0, 18), ("uqshrn", 1, 18),
+        ("sqrshrn", 0, 19), ("uqrshrn", 1, 19),
+        ("sshll", 0, 20), ("ushll", 1, 20),
+    ]
+    for mnemonic, u, opc in forms:
+        for size in range(3 if opc >= 16 else 4):
+            esize = 8 << size
+            left = 10 <= opc <= 14 or opc == 20
+            amount = 3 if left else esize - 1
+            immh, immb = divmod(esize + amount if left else 2 * esize - amount, 8)
+            wide = f"{64 // esize}{SIZES[size + 1]}" if opc >= 16 else ""
+            for q in (0, 1):
+                if size == 3 and not q:
+                    continue
+                narrow = arrangement(size, q)
+                dest, src = (wide, narrow) if opc == 20 else (narrow, wide or narrow)
+                suffix = "2" if q and opc >= 16 else ""
+                add_integer(f"imm_{mnemonic}_{narrow}",
+                            f"SimdShiftImm F {flag(q)} {flag(u)} {immh}w {immb}w {opc}w 28w 29w",
+                            f"{mnemonic}{suffix} v28.{dest},v29.{src},#{amount}")
+            if (opc < 12 and size == 3) or 12 <= opc <= 14 or (16 <= opc < 20 and (u or opc >= 18)):
+                dst = SIZES[size]
+                src = SIZES[size + 1] if opc >= 16 else dst
+                add_integer(f"imm_{mnemonic}_{dst}",
+                            f"SimdShiftImm T T {flag(u)} {immh}w {immb}w {opc}w 28w 29w",
+                            f"{mnemonic} {dst}28,{src}29,#{amount}")
+
+
+def build_three_different_probes() -> None:
+    forms = [
+        ("saddl", 0, 0), ("uaddl", 1, 0), ("saddw", 0, 2), ("uaddw", 1, 2),
+        ("ssubl", 0, 4), ("usubl", 1, 4), ("ssubw", 0, 6), ("usubw", 1, 6),
+        ("addhn", 0, 8), ("raddhn", 1, 8), ("subhn", 0, 12), ("rsubhn", 1, 12),
+        ("sabal", 0, 10), ("uabal", 1, 10), ("sabdl", 0, 14), ("uabdl", 1, 14),
+        ("smlal", 0, 16), ("umlal", 1, 16), ("sqdmlal", 0, 18),
+        ("smlsl", 0, 20), ("umlsl", 1, 20), ("sqdmlsl", 0, 22),
+        ("smull", 0, 24), ("umull", 1, 24), ("sqdmull", 0, 26), ("pmull", 0, 28),
+    ]
+    for mnemonic, u, opc in forms:
+        doubling = opc in (18, 22, 26)
+        sizes = (0,) if opc == 28 else (1, 2) if doubling else range(3)
+        for size in sizes:
+            wide = arrangement(size + 1, 1)
+            for q in (0, 1):
+                narrow = arrangement(size, q)
+                dest, src1, src2 = (narrow, wide, wide) if opc in (8, 12) else (
+                    wide, wide if opc in (2, 6) else narrow, narrow)
+                suffix = "2" if q else ""
+                add_integer(f"diff_{mnemonic}_{narrow}",
+                            f"SimdThreeDifferent F {flag(q)} {flag(u)} {size}w {opc}w 28w 29w 30w",
+                            f"{mnemonic}{suffix} v28.{dest},v29.{src1},v30.{src2}")
+            if doubling:
+                dst, src = SIZES[size + 1], SIZES[size]
+                add_integer(f"diff_{mnemonic}_{dst}",
+                            f"SimdThreeDifferent T T F {size}w {opc}w 28w 29w 30w",
+                            f"{mnemonic} {dst}28,{src}29,{src}30")
+
+
+def build_by_element_probes() -> None:
+    forms = [
+        ("mla", 1, 0), ("mls", 1, 4), ("mul", 0, 8),
+        ("smlal", 0, 2), ("umlal", 1, 2), ("sqdmlal", 0, 3),
+        ("smlsl", 0, 6), ("umlsl", 1, 6), ("sqdmlsl", 0, 7),
+        ("smull", 0, 10), ("umull", 1, 10), ("sqdmull", 0, 11),
+        ("sqdmulh", 0, 12), ("sqrdmulh", 0, 13), ("sqrdmlah", 1, 13), ("sqrdmlsh", 1, 15),
+        ("sdot", 0, 14), ("udot", 1, 14), ("sudot", 0, 15), ("usdot", 0, 15),
+    ]
+    for mnemonic, u, opc in forms:
+        dot = mnemonic in ("sdot", "udot", "sudot", "usdot")
+        long = opc in (2, 3, 6, 7, 10, 11)
+        sizes = (0,) if mnemonic == "sudot" else (2,) if dot else (1, 2)
+        for size in sizes:
+            h, l, mbit = 1, 0, 1
+            dst = 12 if size == 1 else 28
+            src, rm = dst + 1, dst + 2
+            index = 5 if size == 1 else 2
+            element = "4b" if dot else SIZES[size]
+            for q in (0, 1):
+                if dot:
+                    dest, source = arrangement(2, q), arrangement(0, q)
+                elif long:
+                    dest, source = arrangement(size + 1, 1), arrangement(size, q)
+                else:
+                    dest = source = arrangement(size, q)
+                suffix = "2" if q and long else ""
+                add_integer(f"idx_{mnemonic}_{source}",
+                            f"SimdByElement F {flag(q)} {flag(u)} {size}w {flag(l)} "
+                            f"{flag(mbit)} {rm % 16}w {opc}w {flag(h)} {dst}w {src}w",
+                            f"{mnemonic}{suffix} v{dst}.{dest},v{src}.{source},v{rm}.{element}[{index}]",
+                            base=dst)
+            if not dot and opc in (3, 7, 11, 12, 13, 15):
+                dest = SIZES[size + int(long)]
+                add_integer(f"idx_{mnemonic}_{dest}",
+                            f"SimdByElement T T {flag(u)} {size}w {flag(l)} "
+                            f"{flag(mbit)} {rm % 16}w {opc}w {flag(h)} {dst}w {src}w",
+                            f"{mnemonic} {dest}{dst},{element}{src},v{rm}.{element}[{index}]",
+                            base=dst)
+
+
+def build_extension_probes() -> None:
+    for mnemonic, opc in (("sqrdmlah", 16), ("sqrdmlsh", 17)):
+        for size in (1, 2):
+            for q in (0, 1):
+                t = arrangement(size, q)
+                add_integer(f"ext_{mnemonic}_{t}",
+                            f"SimdThreeExtension F {flag(q)} T {size}w {opc}w 28w 29w 30w",
+                            f"{mnemonic} v28.{t},v29.{t},v30.{t}")
+            r = SIZES[size]
+            add_integer(f"ext_{mnemonic}_{r}",
+                        f"SimdThreeExtension T T T {size}w {opc}w 28w 29w 30w",
+                        f"{mnemonic} {r}28,{r}29,{r}30")
+    for mnemonic, u, opc in (("sdot", 0, 18), ("udot", 1, 18), ("usdot", 0, 19),
+                             ("smmla", 0, 20), ("ummla", 1, 20), ("usmmla", 0, 21)):
+        for q in (1,) if opc >= 20 else (0, 1):
+            dest, source = arrangement(2, q), arrangement(0, q)
+            add_integer(f"ext_{mnemonic}_{dest}",
+                        f"SimdThreeExtension F {flag(q)} {flag(u)} 2w {opc}w 28w 29w 30w",
+                        f"{mnemonic} v28.{dest},v29.{source},v30.{source}")
+
 
 build_integer_probes()
+build_shift_probes()
+build_three_different_probes()
+build_by_element_probes()
+build_extension_probes()
 
 
 # Structure loads and stores use the four observed registers from V28 (or V30,
@@ -742,7 +873,7 @@ def write_simd_probes(directory: Path) -> None:
         f"X({name}, {pointer}, {int(name in STRUCTURE_INDEXED)}, 0, {base})"
         for name, _, _, pointer, _, base in STRUCTURE_PROBES
     ]
-    integer_cases = [f"X({name}, -1, 0, 0, 28)" for name, *_ in INTEGER_PROBES]
+    integer_cases = [f"X({name}, -1, 0, 0, {base})" for name, *_, base in INTEGER_PROBES]
     wide = " || ".join(f"id == Case_{name}" for name in sorted(STRUCTURE_WIDE))
     post_register = " || ".join(f"id == Case_{name}" for name in sorted(STRUCTURE_INDEXED))
     (directory / "simd_probes.S").write_text("\n".join(asm) + "\n")
@@ -829,7 +960,7 @@ def generated(directory: Path, objdump: Path) -> tuple[str, int]:
         program = Path(temporary) / "native"
         write_scalar_probes(Path(temporary))
         write_simd_probes(Path(temporary))
-        command("/usr/bin/as", "-march=armv8.2-a+crc+crypto+sha3", "-I", temporary, "-o", obj, directory / "native_a64.S")
+        command("/usr/bin/as", "-march=armv8.6-a+crc+crypto+sha3+i8mm", "-I", temporary, "-o", obj, directory / "native_a64.S")
         command("/usr/bin/gcc", "-O2", "-Wall", "-Wextra", "-Werror", "-I", temporary,
                 directory / "native_a64.c", obj, "-o", program)
         addresses = {
