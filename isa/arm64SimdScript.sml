@@ -89,7 +89,7 @@ Definition simd_permute_value_def:
 End
 
 Definition simd_table_byte_def:
-  simd_table_byte q (regs:num) index table0 table1 table2 table3 (old:word64) =
+  simd_table_byte (regs:num) index table0 table1 table2 table3 (old:word64) =
     let bytes = 16 in
     if index < bytes then elem 8 index table0
     else if regs > 1 ∧ index < 2 * bytes then elem 8 (index - bytes) table1
@@ -99,11 +99,11 @@ Definition simd_table_byte_def:
 End
 
 Definition simd_table_lanes_def:
-  simd_table_lanes q (regs:num) 0 table0 table1 table2 table3 indices old =
+  simd_table_lanes (regs:num) 0 table0 table1 table2 table3 indices old =
     (0w:word128) ∧
-  simd_table_lanes q regs (SUC k) table0 table1 table2 table3 indices old =
-    simd_table_lanes q regs k table0 table1 table2 table3 indices old ||
-    put_lane 8 k (simd_table_byte q regs (w2n (elem 8 k indices))
+  simd_table_lanes regs (SUC k) table0 table1 table2 table3 indices old =
+    simd_table_lanes regs k table0 table1 table2 table3 indices old ||
+    put_lane 8 k (simd_table_byte regs (w2n (elem 8 k indices))
       table0 table1 table2 table3 (elem 8 k old))
 End
 
@@ -112,7 +112,7 @@ Definition simd_table_value_def:
       indices old =
     let elements = if q then 16 else 8;
         regs = w2n len + 1
-    in simd_table_lanes q regs elements table0 table1 table2 table3 indices
+    in simd_table_lanes regs elements table0 table1 table2 table3 indices
          (if is_tbl then 0w else old)
 End
 
@@ -122,7 +122,7 @@ Definition simd_extract_value_def:
         low = simd_lane_mask 64;
         value = if q then (lo >>> shift) || (hi << (128 - shift))
                 else ((lo && low) >>> shift) || ((hi && low) << (64 - shift))
-    in if q then value else value && simd_lane_mask 64
+    in if q then value else value && low
 End
 
 Definition elem_int_def:

@@ -370,6 +370,9 @@ HIGH_SIMD_PROBES = [
     ("fmov_to_d", "SimdTransfer FmovToD 31w 1w", "fmov d31,x1", -1, ()),
     ("fmov_w", "SimdTransfer FmovW 0w 30w", "fmov w0,s30", -1, ()),
     ("fmov_x", "SimdTransfer FmovX 2w 31w", "fmov x2,d31", -1, ()),
+    ("umov_b0", "SimdCopy F F F 1w 7w 2w 31w", "umov w2,v31.b[0]", -1, ()),
+    ("umov_d1", "SimdCopy F T F 24w 7w 2w 31w", "umov x2,v31.d[1]", -1, ("mov x2,v31.d[1]",)),
+    ("dup_2d", "SimdCopy F T F 8w 1w 31w 1w", "dup v31.2d,x1", -1, ()),
     ("ldr_lit_s", "LoadLiteral T 0w 30w 4w", "ldr s30,9f+4", -1, ("ldr s30,16",)),
     ("ldr_lit_d", "LoadLiteral T 1w 31w 0x7fff8w", "ldr d31,8b+16", -1, ("ldr d31,-32",)),
     ("ldr_lit_q", "LoadLiteral T 2w 30w 7w", "ldr q30,9f+16", -1, ("ldr q30,28",)),
@@ -443,7 +446,7 @@ PERMUTE_PROBES = [
     ("ushr_2d_interior", "SimdShiftImm F T T 14w 3w 0w 31w 30w", "ushr v31.2d,v30.2d,#13", -1),
     ("sri_4s_interior", "SimdShiftImm F T T 6w 3w 8w 31w 30w", "sri v31.4s,v30.4s,#13", -1),
 ]
-PERMUTE_PROBES = [(name, instr, asm, ptr, (), 30)
+PERMUTE_SIMD_PROBES = [(name, instr, asm, ptr, (), 30)
                   for name, instr, asm, ptr in PERMUTE_PROBES]
 
 CRYPTO_SIMD_PROBES = [
@@ -570,22 +573,31 @@ def build_copy_probes() -> list[tuple[str, str, str, int, tuple[str, ...], int]]
             if size == 2 and not q:
                 continue
             dst = "x0" if q else "w0"
-            umov_dst = "x0" if size == 3 else "w0"
             imm5 = (1 << (size + 1)) | (1 << size)
             probes.append((f"smov_{dst[0]}_{element}",
                            f"SimdCopy F {flag(q)} F {imm5}w 5w 0w 29w",
                            f"smov {dst},v29.{element}[1]", -1, (), 28))
-            probes.append((f"umov_{dst[0]}_{element}",
-                           f"SimdCopy F {flag(q)} T {imm5}w 5w 0w 29w",
-                           f"umov {umov_dst},v29.{element}[1]", -1,
-                           (f"mov {umov_dst},v29.{element}[1]",), 28))
-    for element, source_index in (("b", 3), ("h", 1), ("s", 1), ("d", 1)):
-        size = "bhsd".index(element)
+    for size, element in enumerate(("b", "h", "s", "d")):
+        q = 0 if size < 3 else 1
         imm5 = (1 << (size + 1)) | (1 << size)
-        probes.append((f"ins_{element}",
-                       f"SimdCopy F T F {imm5}w 3w 28w 29w",
-                       f"ins v28.{element}[1],v29.{element}[{source_index}]", -1,
-                       (f"mov v28.{element}[1],v29.{element}[{source_index}]",), 28))
+        dst = "w0" if not q else "x0"
+        aliases = (f"mov {dst},v29.{element}[1]",) if not (size == 0 and q == 0) else ()
+        probes.append((f"umov_{dst[0]}_{element}",
+                       f"SimdCopy F {flag(q)} F {imm5}w 7w 0w 29w",
+                       f"umov {dst},v29.{element}[1]", -1, aliases, 28))
+    for size, element in enumerate(("b", "h", "s", "d")):
+        imm5 = (1 << (size + 1)) | (1 << size)
+        source = "w1" if size < 3 else "x1"
+        probes.append((f"ins_gen_{element}",
+                       f"SimdCopy F T F {imm5}w 3w 28w 1w",
+                       f"ins v28.{element}[1],{source}", -1,
+                       (f"mov v28.{element}[1],{source}",), 28))
+        source_index = 2 if size < 2 else 1
+        imm4 = source_index << size
+        probes.append((f"ins_elem_{element}",
+                       f"SimdCopy F T T {imm5}w {imm4}w 28w 29w",
+                       f"ins v28.{element}[1],v29.{element}[{source_index}]",
+                       -1, (f"mov v28.{element}[1],v29.{element}[{source_index}]",), 28))
     for size, element in enumerate(("b", "h", "s", "d")):
         imm5 = (1 << (size + 1)) | (1 << size)
         probes.append((f"dup_scalar_{element}",
@@ -604,7 +616,7 @@ for mnemonic, opcode in (("uzp1", 1), ("trn1", 2), ("zip1", 3),
             if size == 3 and not q:
                 continue
             t = arrangement(size, q)
-            PERMUTE_PROBES.append((f"{mnemonic}_{t}",
+            PERMUTE_SIMD_PROBES.append((f"{mnemonic}_{t}",
                                    f"SimdPermute {flag(q)} {size}w {opcode}w 28w 29w 30w",
                                    f"{mnemonic} v28.{t},v29.{t},v30.{t}", -1, (), 28))
 
@@ -617,22 +629,20 @@ for q in (0, 1):
             ranged = "{" + f"v{table_base}.16b-v{(table_base + length) % 32}.16b" + "}"
             table = listed if length == 0 else ranged
             aliases = () if length == 0 else (f"{mnemonic} v28.{t},{listed},v30.{t}",)
-            PERMUTE_PROBES.append((f"{mnemonic}_{t}_{length + 1}r",
+            PERMUTE_SIMD_PROBES.append((f"{mnemonic}_{t}_{length + 1}r",
                                    f"SimdTable {flag(q)} {flag(op)} {length}w 28w {table_base}w 30w",
                                    f"{mnemonic} v28.{t},{table},v30.{t}", -1, aliases, 28))
         listed = "{v30.16b,v31.16b,v0.16b,v1.16b}"
-        PERMUTE_PROBES.append((f"{mnemonic}_{t}_wrap4r",
+        PERMUTE_SIMD_PROBES.append((f"{mnemonic}_{t}_wrap4r",
                                f"SimdTable {flag(q)} {flag(op)} 3w 31w 30w 30w",
                                f"{mnemonic} v31.{t},{listed},v30.{t}", -1,
                                (f"{mnemonic} v31.{t},{{v30.16b-v1.16b}},v30.{t}",), 30))
 
 for q, imm in ((0, 7), (1, 15)):
     t = f"{8 << q}b"
-    PERMUTE_PROBES.append((f"ext_{imm + 1}bytes",
+    PERMUTE_SIMD_PROBES.append((f"ext_{imm + 1}bytes",
                            f"SimdExtract {flag(q)} 28w 29w 30w {imm}w",
                            f"ext v28.{t},v29.{t},v30.{t},#{imm}", -1, (), 28))
-
-PERMUTE_SIMD_PROBES = PERMUTE_PROBES
 
 
 def build_integer_probes() -> None:

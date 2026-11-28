@@ -356,11 +356,11 @@ Definition simd_copy_ok_def:
   simd_copy_ok scalar q op (imm5:word5) (imm4:word4) ⇔
     let sz = w2n (simd_copy_size imm5) in
       (word_bit 0 imm5 ∨ word_bit 1 imm5 ∨ word_bit 2 imm5 ∨ word_bit 3 imm5) ∧
-      if scalar then q ∧ ¬op ∧ imm4 = 0w ∧ sz < 4
-      else if op then q ∧ sz < 4
+      if scalar then q ∧ ¬op ∧ imm4 = 0w
+      else if op then q
       else if imm4 = 0w then sz < 3 ∨ q
       else if imm4 = 1w then sz < 3 ∨ q
-      else if imm4 = 3w then q ∧ sz < 4
+      else if imm4 = 3w then q
       else if imm4 = 5w then
         (sz < 2 ∨ q) ∧ sz < 3
       else if imm4 = 7w then
@@ -373,10 +373,6 @@ Definition simd_permute_ok_def:
     (opcode = 1w ∨ opcode = 2w ∨ opcode = 3w ∨
      opcode = 5w ∨ opcode = 6w ∨ opcode = 7w) ∧
     ¬(sz = 3w ∧ ¬q)
-End
-
-Definition simd_table_ok_def:
-  simd_table_ok (len:word2) ⇔ w2n len < 4
 End
 
 Definition simd_extract_ok_def:
@@ -443,7 +439,7 @@ Definition classify_simd_def:
       SOME (SimdImm (word_bit 30 w) (word_bit 29 w) (w2w (w >>> 12))
               (w2w (w >>> 11) && 0xe0w || w2w (w >>> 5) && 31w) d)
     else
-      let binary = w && 0xffe0fc00w; unary = w && 0xfffffc00w
+      let unary = w && 0xfffffc00w
       in
       (* The scalar FP register transfers overlap the integer three-different
          mask.  Recognize the exact transfer forms before the broad groups. *)
@@ -484,23 +480,16 @@ Definition classify_simd_def:
       else if w && 0xfffff000w = 0xcec08000w ∧
               (if word_bit 10 w then feat.sm4 else feat.sha512) then
         SOME (CryptoTwo (w2w (w >>> 10)) d n)
-      else if w && 0x0f000400w = 0x0e000400w ∧
-              simd_copy_ok (word_bit 28 w) (word_bit 30 w) (word_bit 29 w)
-                (w2w (w >>> 16)) (w2w (w >>> 11)) then
+      else if w && 0x8fe08400w = 0x0e000400w then
         SOME (SimdCopy (word_bit 28 w) (word_bit 30 w) (word_bit 29 w)
                 (w2w (w >>> 16)) (w2w (w >>> 11)) d n)
-      else if w && 0x2f208c00w = 0x0e000800w ∧
-              simd_permute_ok (word_bit 30 w) (w2w (w >>> 22)) (w2w (w >>> 12)) then
+      else if w && 0xbf208c00w = 0x0e000800w then
         SOME (SimdPermute (word_bit 30 w) (w2w (w >>> 22))
                 (w2w (w >>> 12)) d n m)
-      else if w && 0x2fe08c00w = 0x0e000000w ∧
-              simd_table_ok (w2w (w >>> 13)) then
+      else if w && 0xbfe08c00w = 0x0e000000w then
         SOME (SimdTable (word_bit 30 w) (word_bit 12 w) (w2w (w >>> 13)) d n m)
-      else if w && 0x2fe08400w = 0x2e000000w ∧
-              simd_extract_ok (word_bit 30 w) (w2w (w >>> 11)) then
+      else if w && 0xbfe08400w = 0x2e000000w then
         SOME (SimdExtract (word_bit 30 w) d n m (w2w (w >>> 11)))
-      else if w && 0xffe08400w = 0x6e000000w then
-        NONE
       else if w && 0x8f200400w = 0x0e000400w then
         let scalar = word_bit 28 w; q = word_bit 30 w; u = word_bit 29 w;
             size : word2 = w2w (w >>> 22);
@@ -734,10 +723,8 @@ Definition encode_def:
              insert_field 12 opc || reg_fields d n m)
      else NONE) ∧
   encode (SimdTable q op len d n m) =
-    (if simd_table_ok len then
-       SOME (0x0e000000w || flag_field q 30 || flag_field op 12 ||
-             insert_field 13 len || reg_fields d n m)
-     else NONE) ∧
+    SOME (0x0e000000w || flag_field q 30 || flag_field op 12 ||
+          insert_field 13 len || reg_fields d n m) ∧
   encode (SimdExtract q d n m imm) =
     (if simd_extract_ok q imm then
        SOME (0x2e000000w || flag_field q 30 || reg_fields d n m ||
