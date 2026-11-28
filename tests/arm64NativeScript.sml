@@ -28,10 +28,23 @@ Definition read_window_def:
     lookup_default default tree base :: read_window default n (base + 1) tree
 End
 
+(* The observed vector registers start at vbase and wrap from V31 to V0. *)
+Definition put_vectors_def:
+  put_vectors base [] tree = tree ∧
+  put_vectors base (value::values) tree =
+    put_vectors ((base + 1) MOD 32) values (insert base value tree)
+End
+
+Definition read_vectors_def:
+  read_vectors 0 base tree = [] ∧
+  read_vectors (SUC n) base tree =
+    lookup_default 0w tree base :: read_vectors n ((base + 1) MOD 32) tree
+End
+
 Definition test_state_at_def:
   test_state_at vbase w (pc,sp,flags,link,regs,vectors,data) : finite_state =
     let gpr = insert 30 link (put_many 0 regs LN);
-        vec = put_many vbase vectors LN;
+        vec = put_vectors vbase vectors LN;
         code = put_many 208 literal_pool (put_many 268 literal_pool
           (put_many 256 [byte_at w 0; byte_at w 1; byte_at w 2; byte_at w 3] LN));
         mem = put_many 4096 data code;
@@ -50,7 +63,7 @@ Definition observe_at_def:
   observe_at vbase (s:finite_state) : observation =
     (s.pc, s.sp, bits_of_nzcv s.nzcv, lookup_word 0w s.regs (30w:word5),
      read_window 0w 4 0 s.regs,
-     read_window 0w 2 vbase s.vregs,
+     read_vectors 4 vbase s.vregs,
      read_window 0w 64 4096 s.mem)
 End
 
@@ -79,31 +92,21 @@ val simd_cases =
                   end)
     (fst (listSyntax.dest_list (rhs (concl native_simd_cases_def))));
 
+val () = cv_auto_trans agrees_at_def;
+val () = cv_auto_trans test_state_def;
+
 fun check i =
   let
     val name = "native_case_" ^ Int.toString i
     val def = DB.fetch "arm64NativeCases" (name ^ "_def")
-    val sample = rhs (concl def)
-    val (word, rest) = pairSyntax.dest_pair sample
-    val (instr, rest) = pairSyntax.dest_pair rest
-    val initial = fst (pairSyntax.dest_pair rest)
     val vbase = case List.find (fn (index, _) => i = index) simd_cases of
                   SOME (_, base) => base
                 | NONE => 0
     val base = numSyntax.term_of_int vbase
-    val prepared = EVAL ``test_state_at ^base ^word ^initial``
-    val decoded = cv_eval ``decode ^enabled ^word``
-    val encoded = cv_eval ``encode ^instr``
-    val state = rhs (concl prepared)
-    val stepped = cv_eval ``step_cv ^enabled ^state``
-    val predicate = if vbase = 0 then ``agrees`` else ``agrees_at ^base``
-    val comparison = REWRITE_CONV
-      [agrees_def, agrees_at_def, feature, prepared, decoded, encoded, stepped]
-      (mk_comb (predicate, sample))
-    val result = EQT_ELIM (TRANS comparison (EVAL (rhs (concl comparison))))
+    val result = EQT_ELIM (cv_eval ``agrees_at ^base ^(rhs (concl def))``)
   in
     ignore (save_thm (name ^ "_agrees",
-      PURE_REWRITE_RULE [GSYM def] result))
+      PURE_REWRITE_RULE [GSYM def, GSYM agrees_def] result))
   end;
 
 fun check_fault name feat input reason =
@@ -221,16 +224,76 @@ val () = check_fault "q_store_rejects_unwritable_last_byte" enabled
   ``^q_store with perms := insert 4111 (perm T F F) (^q_store).perms`` ``Store``;
 val () = check_fault "q_store_checks_sp_before_access" enabled
   ``test_state 0x3d8003e0w ^initial with sp := 4097w`` ``SPAlignment``;
+(* Structure transfers check every byte and SP alignment before any access. *)
+val multi_load = ``test_state 0x4c40a000w ^initial``;
+val () = check_fault "multi_load_rejects_unreadable_last_byte" enabled
+  ``^multi_load with perms := insert 4127 (perm F F F) (^multi_load).perms`` ``Load``;
+val multi_store = ``test_state 0x4c00a000w ^initial``;
+val () = check_fault "multi_store_rejects_unwritable_last_byte" enabled
+  ``^multi_store with perms := insert 4127 (perm T F F) (^multi_store).perms`` ``Store``;
+val lane_load = ``test_state 0x4d60a400w ^initial``;
+val () = check_fault "lane_load_rejects_unreadable_last_byte" enabled
+  ``^lane_load with perms := insert 4127 (perm F F F) (^lane_load).perms`` ``Load``;
+val lane_store = ``test_state 0x0d20b000w ^initial``;
+val () = check_fault "lane_store_rejects_unwritable_last_byte" enabled
+  ``^lane_store with perms := insert 4111 (perm T F F) (^lane_store).perms`` ``Store``;
+(* The first byte is also inaccessible, so a permission check made first
+   would report Load or Store. *)
+val sp_multi_load = ``test_state 0x4c4073e0w ^initial with sp := 4097w``;
+val () = check_fault "multi_load_checks_sp_before_access" enabled
+  ``^sp_multi_load with perms := insert 4097 (perm F F F) (^sp_multi_load).perms``
+  ``SPAlignment``;
+val sp_lane_store = ``test_state 0x0d0003e0w ^initial with sp := 4097w``;
+val () = check_fault "lane_store_checks_sp_before_access" enabled
+  ``^sp_lane_store with perms := insert 4097 (perm T F F) (^sp_lane_store).perms``
+  ``SPAlignment``;
+
+(* Each crypto instruction needs its own feature. *)
+val () = app (fn (name, feat, word) =>
+    check_fault (name ^ "_requires_its_feature") feat
+      ``test_state ^word ^initial`` ``Unsupported``)
+  [("sha1c", ``^enabled with sha1 := F``, ``0x5e020020w : word32``),
+   ("sha1p", ``^enabled with sha1 := F``, ``0x5e021020w : word32``),
+   ("sha1m", ``^enabled with sha1 := F``, ``0x5e022020w : word32``),
+   ("sha1su0", ``^enabled with sha1 := F``, ``0x5e023020w : word32``),
+   ("sha1h", ``^enabled with sha1 := F``, ``0x5e280820w : word32``),
+   ("sha1su1", ``^enabled with sha1 := F``, ``0x5e281820w : word32``),
+   ("sha256h", ``^enabled with sha256 := F``, ``0x5e024020w : word32``),
+   ("sha256h2", ``^enabled with sha256 := F``, ``0x5e025020w : word32``),
+   ("sha256su1", ``^enabled with sha256 := F``, ``0x5e026020w : word32``),
+   ("sha256su0", ``^enabled with sha256 := F``, ``0x5e282820w : word32``),
+   ("sha512h", ``^enabled with sha512 := F``, ``0xce628020w : word32``),
+   ("sha512h2", ``^enabled with sha512 := F``, ``0xce628420w : word32``),
+   ("sha512su1", ``^enabled with sha512 := F``, ``0xce628820w : word32``),
+   ("sha512su0", ``^enabled with sha512 := F``, ``0xcec08020w : word32``),
+   ("rax1", ``^enabled with sha3 := F``, ``0xce628c20w : word32``),
+   ("eor3", ``^enabled with sha3 := F``, ``0xce020c20w : word32``),
+   ("bcax", ``^enabled with sha3 := F``, ``0xce220c20w : word32``),
+   ("xar", ``^enabled with sha3 := F``, ``0xce820c20w : word32``),
+   ("sm3partw1", ``^enabled with sm3 := F``, ``0xce62c020w : word32``),
+   ("sm3partw2", ``^enabled with sm3 := F``, ``0xce62c420w : word32``),
+   ("sm3ss1", ``^enabled with sm3 := F``, ``0xce420c20w : word32``),
+   ("sm3tt1a", ``^enabled with sm3 := F``, ``0xce429020w : word32``),
+   ("sm3tt1b", ``^enabled with sm3 := F``, ``0xce429420w : word32``),
+   ("sm3tt2a", ``^enabled with sm3 := F``, ``0xce429820w : word32``),
+   ("sm3tt2b", ``^enabled with sm3 := F``, ``0xce429c20w : word32``),
+   ("sm4ekey", ``^enabled with sm4 := F``, ``0xce62c820w : word32``),
+   ("sm4e", ``^enabled with sm4 := F``, ``0xcec08420w : word32``)];
 val () = check_fault "umulh_rejects_reserved_accumulator" enabled
   ``test_state 0x9bc07800w ^initial`` ``Unsupported``;
+val no_asimd = EVAL ``^enabled with asimd := F``;
 val () = app (fn (index, _) =>
   let
     val name = "native_case_" ^ Int.toString index
     val sample = rhs (concl (DB.fetch "arm64NativeCases" (name ^ "_def")))
     val (word, _) = pairSyntax.dest_pair sample
+    val state = ``test_state ^word ^initial``
+    val result = TRANS (AP_THM (AP_TERM ``step_cv`` no_asimd) state)
+      (cv_eval ``step_cv ^(rhs (concl no_asimd)) ^state``)
   in
-    check_fault (name ^ "_requires_asimd") ``^enabled with asimd := F``
-      ``test_state ^word ^initial`` ``Unsupported``
+    if aconv (rhs (concl result)) ``Fault Unsupported : finite_state arm64_result``
+    then ignore (save_thm (name ^ "_requires_asimd", result))
+    else raise Fail (name ^ "_requires_asimd: expected Fault Unsupported")
   end) simd_cases;
 
 val count = numSyntax.int_of_term (rhs (concl native_case_count_def));

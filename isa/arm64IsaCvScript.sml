@@ -1,5 +1,6 @@
 Theory arm64IsaCv
-Ancestors arm64Isa arm64Crypto RoundOp Mult tables cv_std sptree words
+Ancestors arm64Isa arm64Simd arm64Crypto RoundOp Mult tables cv_std sptree words
+  integer_word
 Libs cv_transLib wordsLib
 
 Type finite_state = ``:(word64 spt, word8 spt, perm spt, word128 spt) arm64_machine``
@@ -160,6 +161,46 @@ Proof
   simp[functional_storage_def, finite_storage_def, abstract_reads, abstract_updates]
 QED
 
+Triviality abstract_gather:
+  ∀elems a. gather functional_storage elems bytes stride (abstract_state s) a =
+            gather finite_storage elems bytes stride s a
+Proof
+  Induct >> simp[gather_def, abstract_read_bytes]
+QED
+
+Triviality abstract_scatter:
+  ∀elems a v s. scatter functional_storage elems bytes stride a v (abstract_state s) =
+                abstract_state (scatter finite_storage elems bytes stride a v s)
+Proof
+  Induct >> simp[scatter_def, abstract_write_bytes]
+QED
+
+Triviality abstract_transfers:
+  (∀k s. load_vectors functional_storage k t gap elems bytes stride a (abstract_state s) =
+         abstract_state (load_vectors finite_storage k t gap elems bytes stride a s)) ∧
+  (∀k s. store_vectors functional_storage k t gap elems bytes stride shift a
+           (abstract_state s) =
+         abstract_state (store_vectors finite_storage k t gap elems bytes stride shift a s)) ∧
+  (∀k s. load_lanes functional_storage k t bytes index a (abstract_state s) =
+         abstract_state (load_lanes finite_storage k t bytes index a s))
+Proof
+  rpt conj_tac >> Induct >>
+  simp[load_vectors_def, store_vectors_def, load_lanes_def, LET_THM, abstract_gather,
+       abstract_scatter, abstract_read_bytes, abstract_storage]
+QED
+
+Triviality abstract_structures:
+  execute_multi functional_storage q load post m opc sz t n (abstract_state s) =
+    abstract_result (execute_multi finite_storage q load post m opc sz t n s) ∧
+  execute_lane functional_storage q load post m r lopc sbit sz t n (abstract_state s) =
+    abstract_result (execute_lane finite_storage q load post m r lopc sbit sz t n s)
+Proof
+  simp[execute_multi_def, execute_lane_def, structure_offset_def, pairTheory.UNCURRY,
+       LET_THM, abstract_reads] >>
+  rw[finish_mem_def, abstract_access_ok, abstract_transfers, abstract_base, abstract_pc,
+     abstract_result_def]
+QED
+
 Triviality abstract_execute:
   execute_with functional_storage i (abstract_state s) =
     abstract_result (execute_with finite_storage i s)
@@ -168,6 +209,7 @@ Proof
   simp[execute_with_def, execute_mem_def, execute_pair_def, put_loaded_def,
        stored_value_def, finish_mem_def, logical_flags_def,
        write_arith_def, pairTheory.UNCURRY, abstract_reads, abstract_storage, abstract_gpr,
+       abstract_structures,
        abstract_base, abstract_pc, abstract_access_ok, abstract_read_bytes,
        abstract_write_bytes, GSYM abstract_updates] >>
   TRY (Cases_on `m`) >>
@@ -245,6 +287,78 @@ Proof
   Induct >> simp[cv_access_ok_def, access_ok_def, finite_storage_def]
 QED
 
+Definition cv_gather_def:
+  cv_gather 0 bytes stride (s:finite_state) (a:word64) = (0w:word128) ∧
+  cv_gather (SUC elems) bytes stride s a =
+    cv_read_bytes bytes s a || (cv_gather elems bytes stride s (a + n2w stride) << (8 * bytes))
+End
+
+Triviality cv_gather_eq:
+  ∀elems s a. cv_gather elems bytes stride s a = gather finite_storage elems bytes stride s a
+Proof
+  Induct >> simp[cv_gather_def, gather_def, cv_read_bytes_eq]
+QED
+
+Definition cv_scatter_def:
+  cv_scatter 0 bytes stride (a:word64) (v:word128) (s:finite_state) = s ∧
+  cv_scatter (SUC elems) bytes stride a v s =
+    cv_scatter elems bytes stride (a + n2w stride) (v >>> (8 * bytes))
+      (cv_write_bytes bytes a v s)
+End
+
+Triviality cv_scatter_eq:
+  ∀elems a v s. cv_scatter elems bytes stride a v s = scatter finite_storage elems bytes stride a v s
+Proof
+  Induct >> simp[cv_scatter_def, scatter_def, cv_write_bytes_eq]
+QED
+
+Definition cv_load_vectors_def:
+  cv_load_vectors 0 (t:word5) gap elems bytes stride (a:word64) (s:finite_state) = s ∧
+  cv_load_vectors (SUC k) t gap elems bytes stride a s =
+    cv_load_vectors k t gap elems bytes stride a
+      (s with vregs := insert_word (t + n2w k)
+         (cv_gather elems bytes stride s (a + n2w (k * gap))) s.vregs)
+End
+
+Triviality cv_load_vectors_eq:
+  ∀k s. cv_load_vectors k t gap elems bytes stride a s =
+        load_vectors finite_storage k t gap elems bytes stride a s
+Proof
+  Induct >> simp[cv_load_vectors_def, load_vectors_def, cv_gather_eq, finite_storage_def]
+QED
+
+Definition cv_store_vectors_def:
+  cv_store_vectors 0 (t:word5) gap elems bytes stride shift (a:word64) (s:finite_state) = s ∧
+  cv_store_vectors (SUC k) t gap elems bytes stride shift a s =
+    cv_store_vectors k t gap elems bytes stride shift a
+      (cv_scatter elems bytes stride (a + n2w (k * gap))
+         (lookup_word 0w s.vregs (t + n2w k) >>> shift) s)
+End
+
+Triviality cv_store_vectors_eq:
+  ∀k s. cv_store_vectors k t gap elems bytes stride shift a s =
+        store_vectors finite_storage k t gap elems bytes stride shift a s
+Proof
+  Induct >> simp[cv_store_vectors_def, store_vectors_def, cv_scatter_eq, finite_storage_def]
+QED
+
+Definition cv_load_lanes_def:
+  cv_load_lanes 0 (t:word5) bytes index (a:word64) (s:finite_state) = s ∧
+  cv_load_lanes (SUC k) t bytes index a s =
+    cv_load_lanes k t bytes index a
+      (s with vregs := insert_word (t + n2w k)
+         ((lookup_word 0w s.vregs (t + n2w k) &&
+           ¬(((1w << (8 * bytes)) - 1w) << (8 * bytes * index))) ||
+          (cv_read_bytes bytes s (a + n2w (k * bytes)) << (8 * bytes * index))) s.vregs)
+End
+
+Triviality cv_load_lanes_eq:
+  ∀k s. cv_load_lanes k t bytes index a s = load_lanes finite_storage k t bytes index a s
+Proof
+  Induct >> simp[cv_load_lanes_def, load_lanes_def, LET_THM, cv_read_bytes_eq,
+                 finite_storage_def]
+QED
+
 Definition cv_fetch_def:
   cv_fetch (s:finite_state) = fetch finite_storage s
 End
@@ -281,6 +395,20 @@ Definition cv_execute_mem_def:
     execute_mem finite_storage vec opc size mode t n offset s
 End
 
+Definition cv_structure_offset_def:
+  cv_structure_offset s m total = structure_offset finite_storage s m total
+End
+
+Definition cv_execute_multi_def:
+  cv_execute_multi q load post m opc sz t n s =
+    execute_multi finite_storage q load post m opc sz t n s
+End
+
+Definition cv_execute_lane_def:
+  cv_execute_lane q load post m r opc sbit sz t n s =
+    execute_lane finite_storage q load post m r opc sbit sz t n s
+End
+
 Definition cv_execute_pair_def:
   cv_execute_pair vec opc load mode t u n imm s =
     execute_pair finite_storage vec opc load mode t u n imm s
@@ -289,6 +417,9 @@ End
 val aliases = [cv_gpr_def, cv_base_reg_def, cv_set_gpr_def, cv_set_base_def,
                cv_read_bytes_eq, cv_write_bytes_eq, cv_access_ok_eq,
                cv_fetch_def, cv_write_arith_def, cv_finish_mem_def, cv_put_loaded_def,
+               cv_gather_eq, cv_scatter_eq, cv_load_vectors_eq, cv_store_vectors_eq,
+               cv_load_lanes_eq, cv_structure_offset_def, cv_execute_multi_def,
+               cv_execute_lane_def,
                cv_stored_value_def, cv_execute_mem_def, cv_execute_pair_def,
                cv_execute_def, step_cv_def];
 
@@ -364,9 +495,20 @@ val () = app (fn def => translate_aes_map def genMixColumns_def) [MixColumns_def
 val () = app cv_auto_trans [aes_value_def, crc32_bit_def, crc32_bits_def,
                             crc32_value_def, clmul_def, pmull_value_def];
 
+val () = cv_auto_trans (INST_TYPE [alpha |-> ``:64``] integer_wordTheory.i2w_def);
+val int_shr_pre_def = cv_auto_trans_pre "int_shr_pre" int_shr_def;
+
+Theorem int_shr_pre[cv_pre]:
+  int_shr_pre v n
+Proof
+  simp[int_shr_pre_def]
+QED
+
 val () = cv_auto_trans encode_def;
 val () = cv_auto_trans decode_def;
-val () = app translate [cv_read_bytes_def, cv_write_bytes_def, cv_access_ok_def];
+val () = app translate [cv_read_bytes_def, cv_write_bytes_def, cv_access_ok_def,
+                        cv_gather_def, cv_scatter_def, cv_load_vectors_def,
+                        cv_store_vectors_def, cv_load_lanes_def];
 val () = cv_auto_trans cv_fetch_eq;
 val () = app (fn ty =>
   cv_auto_trans (REWRITE_RULE [LET_THM]
@@ -375,4 +517,4 @@ val () = app (fn ty =>
 val () = app translate_specialised
   [gpr_def, base_reg_def, set_gpr_def, set_base_def, write_arith_def, finish_mem_def,
    put_loaded_def, stored_value_def, execute_mem_def, execute_pair_def,
-   execute_with_def, step_with_def];
+   structure_offset_def, execute_multi_def, execute_lane_def, execute_with_def, step_with_def];

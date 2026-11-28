@@ -11,9 +11,13 @@ address translation.
 one-instruction execution. It covers the base A64 integer and branch
 instructions other than pointer authentication, all general-register
 loads, stores and prefetches outside the atomic, exclusive and ordered
-classes, SIMD&FP single-register, pair and literal loads and stores,
-AdvSIMD modified-immediate moves, and selected AdvSIMD, CRC-32, CRC-32C,
-polynomial multiply and AES instructions. The model gates optional instruction
+classes, SIMD&FP single-register, pair, literal and structure (`LD1`–`LD4`,
+`ST1`–`ST4`, single-lane and replicate) loads and stores, AdvSIMD
+modified-immediate moves, the integer AdvSIMD three-same,
+two-register miscellaneous and across-lanes instructions and their scalar
+forms, the AES, SHA-1, SHA-256, SHA-512, SHA-3, SM3 and SM4 instructions,
+and selected other AdvSIMD, CRC-32, CRC-32C and polynomial multiply
+instructions. Saturating instructions do not set FPSR.QC. The model gates optional instruction
 families by feature and faults on unsupported encodings. Fetches require
 readable, executable, non-writable bytes. Stores require readable,
 writable, non-executable bytes. SP-based transfers also require 16-byte
@@ -30,8 +34,9 @@ With Poly/ML and holbuild on PATH:
 ```sh
 holbuild buildhol
 holbuild -j4 build arm64HolTheory
-holbuild check arm64CryptoTheory arm64IsaTheory arm64IsaCvTheory \
-  arm64NativeCasesTheory arm64NativeTheory arm64L3Theory arm64HolTheory
+holbuild check arm64CryptoTheory arm64SimdTheory arm64IsaTheory arm64IsaCvTheory \
+  arm64CryptoVectorsTheory arm64NativeCasesTheory arm64NativeTheory \
+  arm64L3Theory arm64HolTheory
 ```
 
 ## Conformance
@@ -48,9 +53,12 @@ holbuild check arm64CryptoTheory arm64IsaTheory arm64IsaCvTheory \
   zero-input `CLZ` discrepancy observed against native behavior.
 - `arm64Crypto` proves equivalence of the modeled AES round operations
   with the corresponding components of HOL4's AES reference implementation.
+- `arm64CryptoVectors` computes the GB/T 32907 SM4 and GB/T 32905 SM3
+  examples by stepping assembled SM4 and SM3 instructions, which the native
+  hosts cannot execute.
 
-To reproduce the hardware observations, run on AArch64 with CRC32, PMULL
-and AES support. The generator requires GCC, GNU binutils, Python 3, and
+To reproduce the hardware observations, run on AArch64 with CRC32, PMULL,
+AES, SHA-1, SHA-256, SHA-512 and SHA-3 support. The generator requires GCC, GNU binutils, Python 3, and
 rustup's `llvm-tools` component.
 
 ```sh
@@ -68,7 +76,30 @@ them in HOL4, and reports, per instruction area, the clauses the model
 covers and any word it accepts that Sail rejects.
 
 ```sh
-python3 tools/a64_coverage.py --json coverage.json
+python3 tools/a64_coverage.py --json a64-coverage.json
+```
+
+The JSON gives each clause's mask, opcode and decode status, including
+partial and missing clauses. `encode_of_decode` guarantees round-trip for
+every successful decode. The report attaches checked state-update
+observations, instruction fault theorems and L3 comparisons to clauses by
+instruction word. Empty evidence lists indicate that the report has no
+matching check for that clause. These observations cover individual
+states, and `step_cv_refines` relates the executable evaluator to the
+HOL model for all states.
+
+CI samples the two extremes of each clause's operand fields and includes
+targeted ADD and CAS probes. The report gives separate width rows for
+each ADD form and counts the probes in the corresponding Sail clauses.
+The ADD probes include flag-setting and subtract variants, immediate
+shifts, register shifts and extensions. The regression test rebuilds
+the decoder in a temporary copy with 32-bit ADD immediate disabled and
+reruns the report. It checks that precisely that ADD row becomes missing,
+the corresponding Sail clauses become partial, the clause inventory
+stays fixed, and valid EL0 CAS is explicitly missing.
+
+```sh
+python3 tools/a64_coverage.py --samples 0 --json a64-coverage.json --accept-add
 ```
 
 Released under the [BSD 3-Clause License](LICENSE).

@@ -360,25 +360,14 @@ def write_scalar_probes(directory: Path) -> None:
     )
 
 
-# Each SIMD form has a V30/V31 case. ADD also exercises the rest of the bank.
+# Each SIMD form has a V30/V31 case. ADD exercises the rest of the bank.
 SIMD_PAIR_BASES = range(0, 32, 2)
 HIGH_SIMD_PROBES = [
     ("ldr_q", "MemImm T 3w 0w 30w 1w (Scaled 1w)", "ldr q30,[x1,#16]", 1, ()),
     ("ldr_q_post", "MemImm T 3w 0w 31w 1w (Unscaled PostIndex 16w)", "ldr q31,[x1],#16", 1, ()),
     ("ldr_q_post_neg", "MemImm T 3w 0w 30w 1w (Unscaled PostIndex 496w)", "ldr q30,[x1],#-16", 1, ()),
     ("movi_4s", "SimdImm T F 0w 0w 30w", "movi v30.4s,#0", -1, ()),
-    ("add_4s", "SimdBinary Add4S 30w 30w 31w", "add v30.4s,v30.4s,v31.4s", -1, ()),
-    ("add_2d", "SimdBinary Add2D 31w 30w 31w", "add v31.2d,v30.2d,v31.2d", -1, ()),
-    ("cmeq_16b", "SimdBinary Cmeq16B 31w 30w 31w", "cmeq v31.16b,v30.16b,v31.16b", -1, ()),
-    ("cmeq_zero", "SimdUnary CmeqZero16B 31w 30w", "cmeq v31.16b,v30.16b,#0", -1, ()),
-    ("uminv", "SimdUnary Uminv16B 31w 30w", "uminv b31,v30.16b", -1, ()),
-    ("addv_s", "SimdUnary Addv4S 31w 30w", "addv s31,v30.4s", -1, ()),
-    ("cnt_8b", "SimdUnary Cnt8B 31w 30w", "cnt v31.8b,v30.8b", -1, ()),
-    ("addv_b", "SimdUnary Addv8B 31w 30w", "addv b31,v30.8b", -1, ()),
     ("fmov_to_d", "SimdTransfer FmovToD 31w 1w", "fmov d31,x1", -1, ()),
-    ("addv_h", "SimdUnary Addv8H 30w 31w", "addv h30,v31.8h", -1, ()),
-    ("uaddlp", "SimdUnary Uaddlp16B 31w 30w", "uaddlp v31.8h,v30.16b", -1, ()),
-    ("uadalp", "SimdUnary Uadalp16B 31w 30w", "uadalp v31.8h,v30.16b", -1, ()),
     ("fmov_w", "SimdTransfer FmovW 0w 30w", "fmov w0,s30", -1, ()),
     ("fmov_x", "SimdTransfer FmovX 2w 31w", "fmov x2,d31", -1, ()),
     ("umov_b0", "SimdTransfer UmovB0 2w 31w", "umov w2,v31.b[0]", -1, ()),
@@ -435,9 +424,9 @@ SIMD_INDEXED = {"ldr_q_reg", "str_d_reg", "ldr_s_uxtw"}
 SIMD_PROBES = [
     (*probe, 30) for probe in HIGH_SIMD_PROBES
 ] + [
-    (f"add_4s_v{base}", f"SimdBinary Add4S {base}w {base}w {base + 1}w",
+    (f"add_4s_v{base}", f"SimdThreeSame F T F 2w 16w {base}w {base}w {base + 1}w",
      f"add v{base}.4s,v{base}.4s,v{base + 1}.4s", -1, (), base)
-    for base in SIMD_PAIR_BASES if base != 30
+    for base in SIMD_PAIR_BASES
 ]
 
 PERMUTE_PROBES = [
@@ -446,14 +435,6 @@ PERMUTE_PROBES = [
     ("tbx", "SimdTable T 30w 30w 31w", "tbx v30.16b,{v30.16b},v31.16b", -1),
     ("ext_0", "SimdExtract 31w 30w 31w 0w", "ext v31.16b,v30.16b,v31.16b,#0", -1),
     ("ext_15", "SimdExtract 30w 30w 31w 15w", "ext v30.16b,v30.16b,v31.16b,#15", -1),
-    ("rev16b", "SimdUnary Rev16B 30w 31w", "rev16 v30.16b,v31.16b", -1),
-    ("rev32b", "SimdUnary Rev32B 30w 31w", "rev32 v30.16b,v31.16b", -1),
-    ("rev32h", "SimdUnary Rev32H 31w 30w", "rev32 v31.8h,v30.8h", -1),
-    ("rev64b", "SimdUnary Rev64B 30w 31w", "rev64 v30.16b,v31.16b", -1),
-    ("rev64h", "SimdUnary Rev64H 31w 30w", "rev64 v31.8h,v30.8h", -1),
-    ("rev64s", "SimdUnary Rev64S 30w 31w", "rev64 v30.4s,v31.4s", -1),
-    ("eor_16b", "SimdBinary Eor16B 31w 30w 31w", "eor v31.16b,v30.16b,v31.16b", -1),
-    ("orr_16b", "SimdBinary Orr16B 30w 31w 30w", "orr v30.16b,v31.16b,v30.16b", -1),
     ("shl_4s", "SimdShift Shl 30w 31w 63w", "shl v30.4s,v31.4s,#31", -1),
     ("shl_2d", "SimdShift Shl 31w 30w 64w", "shl v31.2d,v30.2d,#0", -1),
     ("ushr_4s", "SimdShift Ushr 31w 30w 63w", "ushr v31.4s,v30.4s,#1", -1),
@@ -475,24 +456,280 @@ CRYPTO_SIMD_PROBES = [
     ("aesd", "Aes Aesd 30w 31w", "aesd v30.16b,v31.16b", -1, (), 30),
     ("aesmc", "Aes Aesmc 31w 30w", "aesmc v31.16b,v30.16b", -1, (), 30),
     ("aesimc", "Aes Aesimc 30w 31w", "aesimc v30.16b,v31.16b", -1, (), 30),
+    ("sha1c", "ShaThree 0w 28w 29w 30w", "sha1c q28,s29,v30.4s", -1, (), 28),
+    ("sha1p", "ShaThree 1w 28w 29w 30w", "sha1p q28,s29,v30.4s", -1, (), 28),
+    ("sha1m", "ShaThree 2w 28w 29w 30w", "sha1m q28,s29,v30.4s", -1, (), 28),
+    ("sha1su0", "ShaThree 3w 28w 29w 30w", "sha1su0 v28.4s,v29.4s,v30.4s", -1, (), 28),
+    ("sha256h", "ShaThree 4w 28w 29w 30w", "sha256h q28,q29,v30.4s", -1, (), 28),
+    ("sha256h2", "ShaThree 5w 28w 29w 30w", "sha256h2 q28,q29,v30.4s", -1, (), 28),
+    ("sha256su1", "ShaThree 6w 28w 29w 30w", "sha256su1 v28.4s,v29.4s,v30.4s", -1, (), 28),
+    ("sha1h", "ShaTwo 0w 28w 29w", "sha1h s28,s29", -1, (), 28),
+    ("sha1su1", "ShaTwo 1w 28w 29w", "sha1su1 v28.4s,v29.4s", -1, (), 28),
+    ("sha256su0", "ShaTwo 2w 28w 29w", "sha256su0 v28.4s,v29.4s", -1, (), 28),
+    ("sha512h", "CryptoThree F 0w 28w 29w 30w", "sha512h q28,q29,v30.2d", -1, (), 28),
+    ("sha512h2", "CryptoThree F 1w 28w 29w 30w", "sha512h2 q28,q29,v30.2d", -1, (), 28),
+    ("sha512su1", "CryptoThree F 2w 28w 29w 30w", "sha512su1 v28.2d,v29.2d,v30.2d", -1, (), 28),
+    ("rax1", "CryptoThree F 3w 28w 29w 30w", "rax1 v28.2d,v29.2d,v30.2d", -1, (), 28),
+    ("sha512su0", "CryptoTwo 0w 28w 29w", "sha512su0 v28.2d,v29.2d", -1, (), 28),
+    ("eor3", "CryptoFour 0w 28w 29w 30w 31w", "eor3 v28.16b,v29.16b,v30.16b,v31.16b", -1, (), 28),
+    ("bcax", "CryptoFour 1w 28w 29w 30w 31w", "bcax v28.16b,v29.16b,v30.16b,v31.16b", -1, (), 28),
+    ("xar_0", "Xar 28w 29w 30w 0w", "xar v28.2d,v29.2d,v30.2d,#0", -1, (), 28),
+    ("xar_1", "Xar 31w 29w 30w 1w", "xar v31.2d,v29.2d,v30.2d,#1", -1, (), 28),
+    ("xar_63", "Xar 28w 28w 30w 63w", "xar v28.2d,v28.2d,v30.2d,#63", -1, (), 28),
 ]
 
-for name, instruction, assembly, _, aliases, _ in SIMD_PROBES + PERMUTE_SIMD_PROBES + CRYPTO_SIMD_PROBES:
+# Integer AdvSIMD three same, two-register miscellaneous and across lanes
+# instructions, one probe per arrangement, as Vd = V28, Vn = V29, Vm = V30.
+# Each entry gives the mnemonic, U, the opcode, and the element sizes (b, h, s,
+# d) of the vector and scalar forms; 64-bit elements need Q. Narrowing, long
+# and widening forms give the size of their narrow elements.
+THREE_SAME = [
+    ("shadd", 0, 0, "bhs", ""), ("uhadd", 1, 0, "bhs", ""),
+    ("sqadd", 0, 1, "bhsd", "bhsd"), ("uqadd", 1, 1, "bhsd", "bhsd"),
+    ("srhadd", 0, 2, "bhs", ""), ("urhadd", 1, 2, "bhs", ""),
+    ("shsub", 0, 4, "bhs", ""), ("uhsub", 1, 4, "bhs", ""),
+    ("sqsub", 0, 5, "bhsd", "bhsd"), ("uqsub", 1, 5, "bhsd", "bhsd"),
+    ("cmgt", 0, 6, "bhsd", "d"), ("cmhi", 1, 6, "bhsd", "d"),
+    ("cmge", 0, 7, "bhsd", "d"), ("cmhs", 1, 7, "bhsd", "d"),
+    ("sshl", 0, 8, "bhsd", "d"), ("ushl", 1, 8, "bhsd", "d"),
+    ("sqshl", 0, 9, "bhsd", "bhsd"), ("uqshl", 1, 9, "bhsd", "bhsd"),
+    ("srshl", 0, 10, "bhsd", "d"), ("urshl", 1, 10, "bhsd", "d"),
+    ("sqrshl", 0, 11, "bhsd", "bhsd"), ("uqrshl", 1, 11, "bhsd", "bhsd"),
+    ("smax", 0, 12, "bhs", ""), ("umax", 1, 12, "bhs", ""),
+    ("smin", 0, 13, "bhs", ""), ("umin", 1, 13, "bhs", ""),
+    ("sabd", 0, 14, "bhs", ""), ("uabd", 1, 14, "bhs", ""),
+    ("saba", 0, 15, "bhs", ""), ("uaba", 1, 15, "bhs", ""),
+    ("add", 0, 16, "bhsd", "d"), ("sub", 1, 16, "bhsd", "d"),
+    ("cmtst", 0, 17, "bhsd", "d"), ("cmeq", 1, 17, "bhsd", "d"),
+    ("mla", 0, 18, "bhs", ""), ("mls", 1, 18, "bhs", ""),
+    ("mul", 0, 19, "bhs", ""), ("pmul", 1, 19, "b", ""),
+    ("smaxp", 0, 20, "bhs", ""), ("umaxp", 1, 20, "bhs", ""),
+    ("sminp", 0, 21, "bhs", ""), ("uminp", 1, 21, "bhs", ""),
+    ("sqdmulh", 0, 22, "hs", "hs"), ("sqrdmulh", 1, 22, "hs", "hs"),
+    ("addp", 0, 23, "bhsd", ""),
+]
+# Opcode 3 selects the operation by U:size and takes byte arrangements.
+LOGICAL = [("and", 0, 0), ("bic", 0, 1), ("orr", 0, 2), ("orn", 0, 3),
+           ("eor", 1, 0), ("bsl", 1, 1), ("bit", 1, 2), ("bif", 1, 3)]
+# Kinds: same-width lanes, compare with zero, pairwise long, narrow, widen.
+TWO_MISC = [
+    ("rev64", 0, 0, "bhs", "", ""), ("rev32", 1, 0, "bh", "", ""),
+    ("rev16", 0, 1, "b", "", ""),
+    ("saddlp", 0, 2, "bhs", "", "long"), ("uaddlp", 1, 2, "bhs", "", "long"),
+    ("suqadd", 0, 3, "bhsd", "bhsd", ""), ("usqadd", 1, 3, "bhsd", "bhsd", ""),
+    ("cls", 0, 4, "bhs", "", ""), ("clz", 1, 4, "bhs", "", ""),
+    ("cnt", 0, 5, "b", "", ""), ("not", 1, 5, "b", "", ""),
+    ("sadalp", 0, 6, "bhs", "", "long"), ("uadalp", 1, 6, "bhs", "", "long"),
+    ("sqabs", 0, 7, "bhsd", "bhsd", ""), ("sqneg", 1, 7, "bhsd", "bhsd", ""),
+    ("cmgt", 0, 8, "bhsd", "d", "zero"), ("cmge", 1, 8, "bhsd", "d", "zero"),
+    ("cmeq", 0, 9, "bhsd", "d", "zero"), ("cmle", 1, 9, "bhsd", "d", "zero"),
+    ("cmlt", 0, 10, "bhsd", "d", "zero"),
+    ("abs", 0, 11, "bhsd", "d", ""), ("neg", 1, 11, "bhsd", "d", ""),
+    ("xtn", 0, 18, "bhs", "", "narrow"), ("sqxtun", 1, 18, "bhs", "bhs", "narrow"),
+    ("shll", 1, 19, "bhs", "", "widen"),
+    ("sqxtn", 0, 20, "bhs", "bhs", "narrow"), ("uqxtn", 1, 20, "bhs", "bhs", "narrow"),
+    ("urecpe", 0, 28, "s", "", ""), ("ursqrte", 1, 28, "s", "", ""),
+]
+# Across lanes: SADDLV and UADDLV write a double-width result.
+ACROSS = [("saddlv", 0, 3), ("uaddlv", 1, 3), ("smaxv", 0, 10), ("umaxv", 1, 10),
+          ("sminv", 0, 26), ("uminv", 1, 26), ("addv", 0, 27)]
+INTEGER_ALIASES = {"not": "mvn"}
+SIZES = "bhsd"
+INTEGER_PROBES = []
+
+
+def arrangement(size: int, q: int) -> str:
+    return f"{(64 << q) >> (3 + size)}{SIZES[size]}"
+
+
+def add_integer(name: str, instruction: str, assembly: str) -> None:
+    mnemonic, _, operands = assembly.partition(" ")
+    aliases = ((f"{INTEGER_ALIASES[mnemonic]} {operands}",)
+               if mnemonic in INTEGER_ALIASES else ())
+    INTEGER_PROBES.append((name, instruction, assembly, -1, aliases, 28))
+
+
+def flag(b: int) -> str:
+    return "T" if b else "F"
+
+
+def build_integer_probes() -> None:
+    for mnemonic, u, opc, vector, scalar in THREE_SAME:
+        for size in map(SIZES.index, vector):
+            for q in (0, 1):
+                if size == 3 and not q:
+                    continue
+                t = arrangement(size, q)
+                add_integer(f"{mnemonic}_{t}",
+                            f"SimdThreeSame F {flag(q)} {flag(u)} {size}w {opc}w 28w 29w 30w",
+                            f"{mnemonic} v28.{t},v29.{t},v30.{t}")
+        for size in map(SIZES.index, scalar):
+            r = SIZES[size]
+            add_integer(f"{mnemonic}_{r}",
+                        f"SimdThreeSame T T {flag(u)} {size}w {opc}w 28w 29w 30w",
+                        f"{mnemonic} {r}28,{r}29,{r}30")
+    for mnemonic, u, size in LOGICAL:
+        for q in (0, 1):
+            t = arrangement(0, q)
+            add_integer(f"{mnemonic}_{t}",
+                        f"SimdThreeSame F {flag(q)} {flag(u)} {size}w 3w 28w 29w 30w",
+                        f"{mnemonic} v28.{t},v29.{t},v30.{t}")
+    add_integer("rbit_8b", "SimdTwoMisc F F T 1w 5w 28w 29w", "rbit v28.8b,v29.8b")
+    add_integer("rbit_16b", "SimdTwoMisc F T T 1w 5w 28w 29w", "rbit v28.16b,v29.16b")
+    for mnemonic, u, opc, vector, scalar, kind in TWO_MISC:
+        zero = ",#0" if kind == "zero" else ""
+        stem = mnemonic + ("z" if kind == "zero" else "")
+        for size in map(SIZES.index, vector):
+            for q in (0, 1):
+                if size == 3 and not q:
+                    continue
+                t = arrangement(size, q)
+                field = 2 if mnemonic in ("urecpe", "ursqrte") else size
+                instruction = f"SimdTwoMisc F {flag(q)} {flag(u)} {field}w {opc}w 28w 29w"
+                if kind == "long":
+                    text = f"{mnemonic} v28.{(64 << q) >> (4 + size)}{SIZES[size + 1]},v29.{t}"
+                elif kind in ("narrow", "widen"):
+                    wide = f"{8 >> size}{SIZES[size + 1]}"
+                    suffix = "2" if q else ""
+                    text = (f"{mnemonic}{suffix} v28.{t},v29.{wide}" if kind == "narrow" else
+                            f"{mnemonic}{suffix} v28.{wide},v29.{t},#{8 << size}")
+                else:
+                    text = f"{mnemonic} v28.{t},v29.{t}{zero}"
+                add_integer(f"{stem}_{t}", instruction, text)
+        for size in map(SIZES.index, scalar):
+            r = SIZES[size]
+            source = SIZES[size + 1] if kind == "narrow" else r
+            add_integer(f"{stem}_{r}",
+                        f"SimdTwoMisc T T {flag(u)} {size}w {opc}w 28w 29w",
+                        f"{mnemonic} {r}28,{source}29{zero}")
+    for mnemonic, u, opc in ACROSS:
+        for size in range(3):
+            for q in (0, 1):
+                if size == 2 and not q:
+                    continue
+                result = SIZES[size + 1] if opc == 3 else SIZES[size]
+                add_integer(f"{mnemonic}_{arrangement(size, q)}",
+                            f"SimdAcross F {flag(q)} {flag(u)} {size}w {opc}w 28w 29w",
+                            f"{mnemonic} {result}28,v29.{arrangement(size, q)}")
+    add_integer("addp_d", "SimdAcross T T F 3w 27w 28w 29w", "addp d28,v29.2d")
+
+
+build_integer_probes()
+
+
+# Structure loads and stores use the four observed registers from V28 (or V30,
+# wrapping to V1) and address the data window through X1; register post-index
+# forms add X2.
+ARRANGEMENTS = [("8b", 0, False), ("16b", 0, True), ("4h", 1, False), ("8h", 1, True),
+                ("2s", 2, False), ("4s", 2, True), ("1d", 3, False), ("2d", 3, True)]
+MULTI_FORMS = [("ld1", 7, 1, 1), ("ld1", 10, 2, 1), ("ld1", 6, 3, 1), ("ld1", 2, 4, 1),
+               ("ld2", 8, 1, 2), ("ld3", 4, 1, 3), ("ld4", 0, 1, 4)]
+LANE_SIZES = [("b", 1), ("h", 2), ("s", 4), ("d", 8)]
+STRUCTURE_PROBES = []
+STRUCTURE_INDEXED = set()
+STRUCTURE_WIDE = set()
+
+
+def register_list(base: int, count: int, suffix: str) -> tuple[str, ...]:
+    names = [f"v{(base + i) % 32}.{suffix}" for i in range(count)]
+    listed = "{" + ",".join(names) + "}"
+    ranged = "{" + f"{names[0]}-{names[-1]}" + "}"
+    return (listed,) if count == 1 else (listed, ranged)
+
+
+def add_structure(name: str, instruction: str, mnemonic: str, registers: tuple[str, ...],
+                  lane: str, mode: int, total: int, base: int) -> None:
+    suffix = ("[x1]", f"[x1],#{total}", "[x1],x2")[mode]
+    texts = [f"{mnemonic} {r}{lane},{suffix}" for r in registers]
+    if mode == 2:
+        STRUCTURE_INDEXED.add(name)
+    if total > 56:
+        STRUCTURE_WIDE.add(name)
+    STRUCTURE_PROBES.append((name, instruction, texts[0], 1, tuple(texts[1:]), base))
+
+
+def build_structure_probes() -> None:
+    i = 0
+    for load in (True, False):
+        for op, opc, rpt, selem in MULTI_FORMS:
+            for arrangement, size, q in ARRANGEMENTS:
+                if size == 3 and not q and selem != 1:
+                    continue
+                count = rpt * selem
+                mode, base = i % 3, 30 if i % 5 == 0 else 28
+                i += 1
+                mnemonic = op if load else "st" + op[2:]
+                name = f"{mnemonic}_{count}r_{arrangement}_m{mode}"
+                m = ("0w", "31w", "2w")[mode]
+                instruction = (f"MemMulti {'T' if q else 'F'} {'T' if load else 'F'} "
+                               f"{'F' if mode == 0 else 'T'} {m} {opc}w {size}w {base}w 1w")
+                add_structure(name, instruction, mnemonic,
+                              register_list(base, count, arrangement), "", mode,
+                              count * (16 if q else 8), base)
+        for (element, bytes_), scale in zip(LANE_SIZES, range(4)):
+            for selem in range(1, 5):
+                lanes = 16 // bytes_
+                # Cycle through the top lane, lane 0 and an interior lane.
+                choice = (selem + scale + (0 if load else 1)) % 3
+                index = (lanes - 1, 0, (5 * selem + 3) % lanes)[choice]
+                mode, base = i % 3, 30 if i % 5 == 0 else 28
+                i += 1
+                mnemonic = f"{'ld' if load else 'st'}{selem}"
+                name = f"{mnemonic}_{element}{index}_m{mode}"
+                if element == "b":
+                    q, S, size, opc = index >> 3, (index >> 2) & 1, index & 3, 0
+                elif element == "h":
+                    q, S, size, opc = index >> 2, (index >> 1) & 1, (index & 1) << 1, 2
+                elif element == "s":
+                    q, S, size, opc = index >> 1, index & 1, 0, 4
+                else:
+                    q, S, size, opc = index, 0, 1, 4
+                opc += (selem - 1) // 2
+                r = (selem - 1) % 2
+                m = ("0w", "31w", "2w")[mode]
+                instruction = (f"MemLane {'T' if q else 'F'} {'T' if load else 'F'} "
+                               f"{'F' if mode == 0 else 'T'} {m} {'T' if r else 'F'} {opc}w "
+                               f"{'T' if S else 'F'} {size}w {base}w 1w")
+                add_structure(name, instruction, mnemonic,
+                              register_list(base, selem, element), f"[{index}]", mode,
+                              selem * bytes_, base)
+    for selem in range(1, 5):
+        for arrangement, size, q in ARRANGEMENTS:
+            mode, base = i % 3, 30 if i % 5 == 0 else 28
+            i += 1
+            mnemonic = f"ld{selem}r"
+            name = f"{mnemonic}_{arrangement}_m{mode}"
+            m = ("0w", "31w", "2w")[mode]
+            instruction = (f"MemLane {'T' if q else 'F'} T {'F' if mode == 0 else 'T'} {m} "
+                           f"{'T' if (selem - 1) % 2 else 'F'} {6 + (selem - 1) // 2}w F "
+                           f"{size}w {base}w 1w")
+            add_structure(name, instruction, mnemonic,
+                          register_list(base, selem, arrangement), "", mode,
+                          selem * 2 ** size, base)
+
+
+build_structure_probes()
+
+for name, instruction, assembly, _, aliases, _ in SIMD_PROBES + PERMUTE_SIMD_PROBES + CRYPTO_SIMD_PROBES + STRUCTURE_PROBES + INTEGER_PROBES:
+    assert name not in PROBES, name
     PROBES[name] = instruction, tuple(canonical(text) for text in (assembly, *aliases))
 
 
 def write_simd_probes(directory: Path) -> None:
     asm = [f'{"literal_probe" if name.startswith("ldr_lit") else "straight"} {name}, "{assembly}"'
-           for name, _, assembly, _, _, _ in SIMD_PROBES + PERMUTE_SIMD_PROBES + CRYPTO_SIMD_PROBES]
+           for name, _, assembly, _, _, _ in SIMD_PROBES + PERMUTE_SIMD_PROBES + CRYPTO_SIMD_PROBES + STRUCTURE_PROBES + INTEGER_PROBES]
     cases = [
         f"X({name}, {pointer}, {int(name in SIMD_INDEXED)}, 0, {base})"
         for name, _, _, pointer, _, base in SIMD_PROBES
     ]
-    # Native dispatch uses the even register number times four as a byte offset.
+    # Native dispatch uses the even register number times eight as a byte offset
+    # into 16-byte entries; the four registers wrap from V31 to V0.
     for label, op, done in (("load", "ldp", "loads"), ("store", "stp", "stores")):
-        asm.append(f".L{label}_pairs:")
+        asm.append(f".L{label}_vectors:")
         for base in SIMD_PAIR_BASES:
-            asm += [f"    {op} q{base}, q{base + 1}, [x9, #32]", f"    b .L{done}_done"]
+            asm += [f"    {op} q{base}, q{base + 1}, [x9, #32]",
+                    f"    {op} q{(base + 2) % 32}, q{(base + 3) % 32}, [x9, #64]",
+                    f"    b .L{done}_done", "    nop"]
     permute_cases = [
         f"X({name}, {pointer}, 0, 0, {base})"
         for name, _, _, pointer, _, base in PERMUTE_SIMD_PROBES
@@ -501,11 +738,22 @@ def write_simd_probes(directory: Path) -> None:
         f"X({name}, {pointer}, 0, 0, {base})"
         for name, _, _, pointer, _, base in CRYPTO_SIMD_PROBES
     ]
+    structure_cases = [
+        f"X({name}, {pointer}, {int(name in STRUCTURE_INDEXED)}, 0, {base})"
+        for name, _, _, pointer, _, base in STRUCTURE_PROBES
+    ]
+    integer_cases = [f"X({name}, -1, 0, 0, 28)" for name, *_ in INTEGER_PROBES]
+    wide = " || ".join(f"id == Case_{name}" for name in sorted(STRUCTURE_WIDE))
+    post_register = " || ".join(f"id == Case_{name}" for name in sorted(STRUCTURE_INDEXED))
     (directory / "simd_probes.S").write_text("\n".join(asm) + "\n")
     (directory / "simd_probes.h").write_text(
         "#define SIMD_CASES(X) " + " ".join(cases)
         + "\n#define PERMUTE_CASES(X) " + " ".join(permute_cases) + "\n"
         "#define CRYPTO_SIMD_CASES(X) " + " ".join(crypto_cases) + "\n"
+        "#define STRUCTURE_CASES(X) " + " ".join(structure_cases) + "\n"
+        "#define INTEGER_SIMD_CASES(X) " + " ".join(integer_cases) + "\n"
+        f"#define WIDE_CASE(id) ({wide})\n"
+        f"#define POST_REGISTER_CASE(id) ({post_register})\n"
     )
 
 
@@ -555,19 +803,19 @@ def normalize_instruction(address: int, text: str) -> str:
 
 def observation(row: str) -> str:
     fields = row.split()
-    if len(fields) != 13:
-        raise ValueError(f"expected thirteen state fields, got {row}")
+    if len(fields) != 17:
+        raise ValueError(f"expected seventeen state fields, got {row}")
     pc = 256 + int(fields[0])
     sp = int(fields[1], 16)
     nzcv = int(fields[2], 16)
     registers = [int(w, 16) for w in fields[3:7]]
-    vectors = [int(w, 16) for w in fields[7:11]]
-    link = int(fields[11], 16)
-    data = bytes.fromhex(fields[12])
+    vectors = [int(w, 16) for w in fields[7:15]]
+    link = int(fields[15], 16)
+    data = bytes.fromhex(fields[16])
     if len(data) != 64:
         raise ValueError(f"expected 64 bytes, got {len(data)}")
     regs = [f"0x{w:016x}w" for w in registers]
-    packed = [vectors[i] | (vectors[i + 1] << 64) for i in (0, 2)]
+    packed = [vectors[i] | (vectors[i + 1] << 64) for i in (0, 2, 4, 6)]
     return (
         f"({pc}w, 0x{sp:x}w, {nzcv}w, 0x{link:016x}w, [{'; '.join(regs)}],\n"
         f"       [{'; '.join(f'0x{v:032x}w' for v in packed)}],\n"
@@ -581,7 +829,7 @@ def generated(directory: Path, objdump: Path) -> tuple[str, int]:
         program = Path(temporary) / "native"
         write_scalar_probes(Path(temporary))
         write_simd_probes(Path(temporary))
-        command("/usr/bin/as", "-march=armv8-a+crc+crypto", "-I", temporary, "-o", obj, directory / "native_a64.S")
+        command("/usr/bin/as", "-march=armv8.2-a+crc+crypto+sha3", "-I", temporary, "-o", obj, directory / "native_a64.S")
         command("/usr/bin/gcc", "-O2", "-Wall", "-Wextra", "-Werror", "-I", temporary,
                 directory / "native_a64.c", obj, "-o", program)
         addresses = {
@@ -627,7 +875,7 @@ def generated(directory: Path, objdump: Path) -> tuple[str, int]:
     l3_clz_zero = []
     crc_cases = []
     simd_cases = []
-    simd_bases = {name: base for name, *_, base in SIMD_PROBES + PERMUTE_SIMD_PROBES + CRYPTO_SIMD_PROBES}
+    simd_bases = {name: base for name, *_, base in SIMD_PROBES + PERMUTE_SIMD_PROBES + CRYPTO_SIMD_PROBES + STRUCTURE_PROBES + INTEGER_PROBES}
     for i in range(0, len(rows), 3):
         n = i // 3
         header, initial, final = rows[i:i + 3]
@@ -651,7 +899,7 @@ def generated(directory: Path, objdump: Path) -> tuple[str, int]:
         ]
     count = len(rows) // 3
     lines += ["Definition native_case_count_def:",
-              f"  native_case_count = {count}", "End", ""]
+              f"  native_case_count : num = {count}", "End", ""]
     groups = ["; ".join(l3_cases[i:i + 16]) for i in range(0, len(l3_cases), 16)]
     lines += ["Definition native_l3_cases_def:",
               "  native_l3_cases : num list =",

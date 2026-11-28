@@ -1,6 +1,6 @@
 .text
 
-// Enter a case with X0-X3, one Q-register pair and NZCV from the supplied state.
+// Enter a case with X0-X3, four consecutive Q registers and NZCV from the supplied state.
 // X9 holds the state pointer, X10 the host return address, and X13 the RET offset.
 // X14 holds the host stack pointer and X15 the probe stack pointer.
 .global native_step
@@ -17,31 +17,31 @@ native_step:
     stp d14, d15, [sp, #48]
     mov x14, sp
     uxtw x16, w3
-    ldp x15, x30, [x9, #144]
+    ldp x15, x30, [x9, #176]
     mov x17, #0
     ldp x0, x1, [x9]
     ldp x2, x3, [x9, #16]
-    adr x7, .Lload_pairs
-    add x7, x7, x16, lsl #2
+    adr x7, .Lload_vectors
+    add x7, x7, x16, lsl #3
     br x7
 .Lloads_done:
-    ldr x8, [x9, #64]
+    ldr x8, [x9, #96]
     msr nzcv, x8
     br x11
 
 .Lfinish:
     stp x0, x1, [x9]
     stp x2, x3, [x9, #16]
-    adr x7, .Lstore_pairs
-    add x7, x7, x16, lsl #2
+    adr x7, .Lstore_vectors
+    add x7, x7, x16, lsl #3
     br x7
 .Lstores_done:
     mrs x8, nzcv
-    stp x8, x12, [x9, #64]
+    stp x8, x12, [x9, #96]
     cbz x17, 1f
     sub x30, x30, x17
     add x30, x30, #256
-1:  stp x15, x30, [x9, #144]
+1:  stp x15, x30, [x9, #176]
     ldp d10, d11, [sp, #16]
     ldp d12, d13, [sp, #32]
     ldp d14, d15, [sp, #48]
