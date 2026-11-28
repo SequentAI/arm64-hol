@@ -526,13 +526,19 @@ for q in (0, 1):
     t = f"{8 << q}b"
     for op, mnemonic in ((0, "tbl"), (1, "tbx")):
         for length in range(4):
-            listed = "{" + ",".join(f"v{(29 + i) % 32}.16b" for i in range(length + 1)) + "}"
-            ranged = "{" + f"v29.16b-v{(29 + length) % 32}.16b" + "}"
+            table_base = 28 if length == 3 else 29
+            listed = "{" + ",".join(f"v{(table_base + i) % 32}.16b" for i in range(length + 1)) + "}"
+            ranged = "{" + f"v{table_base}.16b-v{(table_base + length) % 32}.16b" + "}"
             table = listed if length == 0 else ranged
             aliases = () if length == 0 else (f"{mnemonic} v28.{t},{listed},v30.{t}",)
             PERMUTE_PROBES.append((f"{mnemonic}_{t}_{length + 1}r",
-                                   f"SimdTable {flag(q)} {flag(op)} {length}w 28w 29w 30w",
+                                   f"SimdTable {flag(q)} {flag(op)} {length}w 28w {table_base}w 30w",
                                    f"{mnemonic} v28.{t},{table},v30.{t}", -1, aliases))
+        listed = "{v30.16b,v31.16b,v0.16b,v1.16b}"
+        PERMUTE_PROBES.append((f"{mnemonic}_{t}_wrap4r",
+                               f"SimdTable {flag(q)} {flag(op)} 3w 31w 30w 30w",
+                               f"{mnemonic} v31.{t},{listed},v30.{t}", -1,
+                               (f"{mnemonic} v31.{t},{{v30.16b-v1.16b}},v30.{t}",), 30))
 
 for q, imm in ((0, 7), (1, 15)):
     t = f"{8 << q}b"
@@ -541,7 +547,8 @@ for q, imm in ((0, 7), (1, 15)):
                            f"ext v28.{t},v29.{t},v30.{t},#{imm}", -1))
 
 PERMUTE_SIMD_PROBES = [(probe[0], probe[1], probe[2], probe[3],
-                        probe[4] if len(probe) > 4 else (), 30)
+                        probe[4] if len(probe) > 4 else (),
+                        probe[5] if len(probe) > 5 else 28)
                        for probe in PERMUTE_PROBES]
 
 CRYPTO_SIMD_PROBES = [

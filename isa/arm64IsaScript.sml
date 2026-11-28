@@ -1185,15 +1185,6 @@ Definition bit_op_value_def:
   bit_op_value sf Rev32 x = reverse_groups 4 2 x
 End
 
-Definition simd_table_def:
-  simd_table 0 (table:word128) indices old = (0w:word128) ∧
-  simd_table (SUC n) table indices old =
-    (let index = w2n (w2w indices : word8);
-         value = if index < 16 then table >>> (8 * index) else old
-     in (value && 255w) ||
-        (simd_table n table (indices >>> 8) (old >>> 8) << 8))
-End
-
 Definition simd_ext_def:
   simd_ext bytes (lo:word128) (hi:word128) =
     (lo >>> (8 * bytes)) || (hi << (128 - 8 * bytes))

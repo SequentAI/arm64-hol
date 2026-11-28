@@ -119,8 +119,9 @@ End
 Definition simd_extract_value_def:
   simd_extract_value q (imm4:word4) lo hi =
     let shift = 8 * w2n imm4;
+        low = simd_lane_mask 64;
         value = if q then (lo >>> shift) || (hi << (128 - shift))
-                else (lo >>> shift) || (hi << (64 - shift))
+                else ((lo && low) >>> shift) || ((hi && low) << (64 - shift))
     in if q then value else value && simd_lane_mask 64
 End
 
